@@ -1,0 +1,16 @@
+{
+  "name": "torneio-criptografia-gui",
+  "version": "1.0.0",
+  "description": "Interface grafica (Electron) para os algoritmos em C: Cesar, Vigenere, Atbash e XOR",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "build": "node scripts/build-c.js",
+    "preelectron": "node scripts/preparar.js",
+    "electron": "npm run build && electron . --no-sandbox",
+    "start": "npm run electron"
+  },
+  "devDependencies": {
+    "electron": "^37.10.3"
+  }
+}

@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'">
+  <title>Torneio de Criptografia</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topo">
+    <h1>Torneio de Criptografia</h1>
+    <nav class="navegacao">
+      <button type="button" class="aba ativa" data-tela="ferramenta">Ferramenta</button>
+      <button type="button" class="aba" data-tela="codigos">Códigos</button>
+    </nav>
+  </header>
+
+  <main id="tela-ferramenta" class="tela">
+    <section class="bloco">
+      <div class="linha-titulo">
+        <label for="texto" id="rotulo-texto">Texto a ser descriptografado</label>
+        <span id="contador" class="discreto">0 caracteres</span>
+        <button type="button" id="abrir-texto" class="secundario">Abrir .txt no campo</button>
+      </div>
+      <textarea id="texto" rows="5" spellcheck="false" placeholder="Cole ou digite o texto aqui"></textarea>
+    </section>
+
+    <section class="bloco grade">
+      <div>
+        <label for="chave">Chave</label>
+        <input id="chave" type="text" spellcheck="false" autocomplete="off"
+               placeholder="ex.: 3  ·  segredo  ·  42  ·  0x2a, 0x10">
+        <p class="dica">
+          Deixe a chave <strong>vazia</strong> para o programa testar todas as possibilidades e
+          descobrir a chave. Se souber a chave: César 1 a 25 · Vigenère letras a-z ·
+          XOR bytes 0-255 separados por vírgula · Atbash não tem chave.
+        </p>
+      </div>
+      <div>
+        <span class="rotulo">Arquivo .txt cifrado</span>
+        <div class="arquivo">
+          <button type="button" id="abrir-xor">Adicionar arquivo .txt</button>
+          <span id="nome-xor" class="discreto">nenhum arquivo</span>
+          <button type="button" id="limpar-xor" class="secundario" hidden>Remover</button>
+        </div>
+        <p class="dica">Ao adicionar o arquivo, a análise começa sozinha e mostra o algoritmo ideal.</p>
+      </div>
+    </section>
+
+    <section class="bloco">
+      <fieldset class="modo">
+        <legend>Operação</legend>
+        <label><input type="radio" name="modo" value="decifrar" checked> Descriptografar</label>
+        <label><input type="radio" name="modo" value="cifrar"> Criptografar</label>
+      </fieldset>
+      <div class="botoes">
+        <button type="button" class="algoritmo" data-algoritmo="cesar">César</button>
+        <button type="button" class="algoritmo" data-algoritmo="vigenere">Vigenère</button>
+        <button type="button" class="algoritmo" data-algoritmo="atbash">Atbash</button>
+        <button type="button" class="algoritmo" data-algoritmo="xor">XOR</button>
+      </div>
+      <button type="button" id="automatico" class="algoritmo automatico" data-algoritmo="auto">
+        Automático: testa tudo e acha as cifras e a chave (fases 3 e 4)
+      </button>
+    </section>
+
+    <section class="bloco">
+      <div class="linha-titulo">
+        <span class="rotulo">Resultado</span>
+        <span id="titulo-resultado" class="discreto"></span>
+        <div class="acoes">
+          <button type="button" id="usar" class="secundario" disabled>Usar como entrada</button>
+          <button type="button" id="copiar" class="secundario" disabled>Copiar</button>
+          <button type="button" id="salvar" class="secundario" disabled>Salvar .txt</button>
+        </div>
+      </div>
+      <section id="chave-encontrada" class="chave-encontrada" hidden>
+        <p class="ideal">Algoritmo ideal: <strong id="ideal-texto"></strong> <span id="ideal-tempo" class="discreto"></span></p>
+        <p class="chave-titulo">Chave encontrada: <strong id="chave-texto"></strong></p>
+        <p class="chave-cifras">Cifras, na ordem em que foram aplicadas: <span id="cifras-texto"></span></p>
+        <table id="tabela-chave" class="tabela-chave">
+          <thead>
+            <tr><th>Valor</th><th>Decimal</th><th>Hexadecimal</th><th>Binário</th></tr>
+          </thead>
+          <tbody id="corpo-chave"></tbody>
+        </table>
+      </section>
+      <p id="status" class="status" role="status"></p>
+      <pre id="resultado" class="resultado"></pre>
+      <details id="detalhes-opcoes" class="opcoes" hidden>
+        <summary>Outras possibilidades testadas</summary>
+        <ol id="lista-opcoes"></ol>
+      </details>
+    </section>
+  </main>
+
+  <main id="tela-codigos" class="tela" hidden>
+    <div id="abas-codigo" class="abas-codigo"></div>
+    <p id="info-codigo" class="discreto"></p>
+    <pre id="codigo" class="codigo"></pre>
+  </main>
+
+  <script src="renderer.js"></script>
+</body>
+</html>

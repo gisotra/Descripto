@@ -1,0 +1,362 @@
+:root {
+  --fundo: #f4f5f7;
+  --cartao: #ffffff;
+  --texto: #1d2129;
+  --discreto: #5f6673;
+  --borda: #d5d9e0;
+  --destaque: #2457c5;
+  --destaque-texto: #ffffff;
+  --erro: #b3261e;
+  --ok: #1e7a3c;
+  --codigo-fundo: #f0f2f5;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --fundo: #16181d;
+    --cartao: #1f2229;
+    --texto: #e6e8ec;
+    --discreto: #9aa1ad;
+    --borda: #343844;
+    --destaque: #5b8def;
+    --destaque-texto: #0d1117;
+    --erro: #f2867e;
+    --ok: #6fcf8e;
+    --codigo-fundo: #191b21;
+    color-scheme: dark;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+body {
+  margin: 0;
+  background: var(--fundo);
+  color: var(--texto);
+  font: 14px/1.45 system-ui, "Segoe UI", Ubuntu, sans-serif;
+}
+
+.topo {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 20px;
+  background: var(--cartao);
+  border-bottom: 1px solid var(--borda);
+}
+
+.topo h1 {
+  margin: 0;
+  font-size: 17px;
+}
+
+.navegacao {
+  display: flex;
+  gap: 6px;
+}
+
+.tela {
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 16px 20px 24px;
+}
+
+.bloco {
+  background: var(--cartao);
+  border: 1px solid var(--borda);
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin-bottom: 12px;
+}
+
+.grade {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.linha-titulo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 6px;
+  flex-wrap: wrap;
+}
+
+.acoes {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+}
+
+label,
+.rotulo,
+legend {
+  font-weight: 600;
+}
+
+.grade label,
+.grade .rotulo {
+  display: block;
+  margin-bottom: 6px;
+}
+
+.discreto {
+  color: var(--discreto);
+  font-size: 13px;
+}
+
+.dica {
+  margin: 6px 0 0;
+  color: var(--discreto);
+  font-size: 12px;
+}
+
+textarea,
+input[type="text"] {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--borda);
+  border-radius: 6px;
+  background: var(--fundo);
+  color: var(--texto);
+  font: 13px/1.4 ui-monospace, "DejaVu Sans Mono", monospace;
+}
+
+textarea {
+  resize: vertical;
+}
+
+textarea:focus,
+input:focus,
+button:focus-visible {
+  outline: 2px solid var(--destaque);
+  outline-offset: 1px;
+}
+
+button {
+  padding: 7px 14px;
+  border: 1px solid var(--destaque);
+  border-radius: 6px;
+  background: var(--destaque);
+  color: var(--destaque-texto);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+button.secundario,
+button.aba {
+  background: transparent;
+  color: var(--destaque);
+  font-weight: 500;
+}
+
+button.aba.ativa {
+  background: var(--destaque);
+  color: var(--destaque-texto);
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.arquivo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.modo {
+  display: flex;
+  gap: 18px;
+  border: 0;
+  padding: 0;
+  margin: 0 0 10px;
+}
+
+.modo legend {
+  float: left;
+  margin-right: 8px;
+}
+
+.modo label {
+  font-weight: 400;
+  cursor: pointer;
+}
+
+.botoes {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+}
+
+.botoes .algoritmo {
+  padding: 12px 0;
+  font-size: 15px;
+}
+
+.automatico {
+  display: block;
+  width: 100%;
+  margin-top: 10px;
+  padding: 11px 0;
+  background: transparent;
+  color: var(--destaque);
+  border-width: 2px;
+}
+
+.chave-encontrada {
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  border: 2px solid var(--ok);
+  border-radius: 6px;
+}
+
+.chave-encontrada p {
+  margin: 0 0 6px;
+}
+
+.chave-encontrada .ideal {
+  font-size: 17px;
+  margin-bottom: 8px;
+}
+
+.chave-titulo {
+  font-size: 15px;
+}
+
+.chave-titulo strong,
+.tabela-chave td {
+  font-family: ui-monospace, "DejaVu Sans Mono", monospace;
+}
+
+.chave-cifras {
+  color: var(--discreto);
+  font-size: 13px;
+}
+
+.tabela-chave {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 13px;
+}
+
+.tabela-chave th,
+.tabela-chave td {
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--borda);
+  text-align: left;
+}
+
+.tabela-chave th {
+  color: var(--discreto);
+  font-weight: 600;
+}
+
+.opcoes {
+  margin-top: 10px;
+  font-size: 13px;
+}
+
+.opcoes summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.opcoes ol {
+  margin: 8px 0 0;
+  padding-left: 22px;
+}
+
+.opcoes li {
+  margin-bottom: 6px;
+}
+
+.opcoes .previa {
+  display: block;
+  color: var(--discreto);
+  font: 12px/1.4 ui-monospace, "DejaVu Sans Mono", monospace;
+  word-break: break-all;
+}
+
+.status {
+  min-height: 1.4em;
+  margin: 0 0 6px;
+  font-size: 13px;
+  white-space: pre-wrap;
+}
+
+.status.erro {
+  color: var(--erro);
+}
+
+.status.ok {
+  color: var(--ok);
+}
+
+.resultado,
+.codigo {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--borda);
+  border-radius: 6px;
+  background: var(--codigo-fundo);
+  font: 13px/1.45 ui-monospace, "DejaVu Sans Mono", monospace;
+  white-space: pre-wrap;
+  word-break: break-all;
+  overflow: auto;
+}
+
+.resultado {
+  min-height: 120px;
+  max-height: 320px;
+}
+
+.abas-codigo {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.codigo {
+  max-height: calc(100vh - 170px);
+  counter-reset: linha;
+  word-break: normal;
+  white-space: pre;
+}
+
+.codigo .linha {
+  display: block;
+}
+
+.codigo .linha::before {
+  counter-increment: linha;
+  content: counter(linha);
+  display: inline-block;
+  width: 3em;
+  margin-right: 12px;
+  color: var(--discreto);
+  text-align: right;
+  user-select: none;
+}
+
+@media (max-width: 760px) {
+  .grade {
+    grid-template-columns: 1fr;
+  }
+
+  .botoes {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
