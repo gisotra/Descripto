@@ -24,9 +24,21 @@ npm run electron
 O `npm run electron` instala o Electron sozinho na primeira vez, compila
 `c/motor.c` com o gcc (gera `bin/motor`) e abre a janela.
 
-**Windows:** precisa do Node.js e de um `gcc` no PATH (MinGW-w64, por exemplo pelo MSYS2).
-O programa foi escrito para funcionar lá (pasta Downloads, discos, modo binário), mas
-**ainda não foi testado no Windows**.
+**Windows:** só precisa do Node.js (https://nodejs.org). **Não precisa instalar o gcc**:
+o `npm run electron` usa o `prebuilt/motor-windows-x64.exe`, que já vem no repositório
+(compilado do mesmo `c/motor.c`; ele só é usado se o hash do código-fonte conferir, então
+nunca roda uma versão desatualizada). Se o `gcc` (MinGW-w64) estiver no PATH, o programa
+compila o `c/motor.c` normalmente. O `.exe` não é assinado: o Windows Defender / SmartScreen
+pode reclamar na primeira execução.
+
+Para quem altera o `c/motor.c`: gerar de novo o `.exe` (a partir do Linux, com o Zig) e o hash:
+
+```bash
+python3 -m pip install --target /tmp/zig ziglang
+PYTHONPATH=/tmp/zig python3 -m ziglang cc -target x86_64-windows-gnu -O2 -std=gnu11 \
+    -o prebuilt/motor-windows-x64.exe c/motor.c
+node scripts/hash-fonte.js
+```
 
 ## Atalhos
 
@@ -85,7 +97,8 @@ quebra de linha final.
 algoritmos/         os 4 códigos originais, SEM modificação (mostrados na tela "Códigos")
 c/motor.c           programa em C que a interface executa
 c/modelo_pt.h       tabela de trigramas de letras do português (gerada de texto da Wikipédia e de Dom Casmurro)
-scripts/build-c.js  compila o motor com o gcc
+scripts/build-c.js  compila o motor com o gcc (ou usa o .exe pré-compilado no Windows)
+prebuilt/           motor.exe pré-compilado para Windows e o hash do código-fonte de onde ele veio
 scripts/preparar.js instala as dependências na primeira execução
 main.js             processo principal do Electron (janela, pastas, arquivos, chama o motor)
 preload.js          ponte segura entre a tela e o main.js

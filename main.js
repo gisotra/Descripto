@@ -142,7 +142,7 @@ async function listarLugares() {
     ['Pasta pessoal', app.getPath('home')],
   ];
   if (process.platform === 'win32') {
-    for (let codigo = 65; codigo <= 90; codigo++) {
+    for (let codigo = 67; codigo <= 90; codigo++) {   // de C: a Z: (A: e B: são disquetes)
       const letra = String.fromCharCode(codigo);
       candidatos.push([`Disco ${letra}:`, `${letra}:\\`]);
     }
