@@ -9,96 +9,163 @@
 <body>
   <header class="topo">
     <h1>Torneio de Criptografia</h1>
-    <nav class="navegacao">
-      <button type="button" class="aba ativa" data-tela="ferramenta">Ferramenta</button>
-      <button type="button" class="aba" data-tela="codigos">Códigos</button>
+    <nav class="navegacao" role="tablist" aria-label="Telas">
+      <button type="button" role="tab" class="aba ativa" data-tela="descriptografar" aria-selected="true">Descriptografar <kbd>Ctrl+1</kbd></button>
+      <button type="button" role="tab" class="aba" data-tela="criptografar" aria-selected="false">Criptografar <kbd>Ctrl+2</kbd></button>
+      <button type="button" role="tab" class="aba" data-tela="codigos" aria-selected="false">Códigos <kbd>Ctrl+3</kbd></button>
     </nav>
   </header>
 
-  <main id="tela-ferramenta" class="tela">
-    <section class="bloco">
+  <!-- ====================== DESCRIPTOGRAFAR ====================== -->
+  <main id="tela-descriptografar" class="tela" role="tabpanel">
+    <section class="bloco" aria-labelledby="titulo-navegador">
       <div class="linha-titulo">
-        <label for="texto" id="rotulo-texto">Texto a ser descriptografado</label>
-        <span id="contador" class="discreto">0 caracteres</span>
-        <button type="button" id="abrir-texto" class="secundario">Abrir .txt no campo</button>
+        <h2 id="titulo-navegador">Escolha o arquivo .txt cifrado</h2>
+        <span id="caminho" class="caminho"></span>
       </div>
-      <textarea id="texto" rows="5" spellcheck="false" placeholder="Cole ou digite o texto aqui"></textarea>
+      <ul id="lista" class="lista" role="listbox" tabindex="0" aria-label="Pastas e arquivos .txt"></ul>
+      <p id="aviso-lista" class="dica"></p>
     </section>
 
-    <section class="bloco grade">
-      <div>
-        <label for="chave">Chave</label>
-        <input id="chave" type="text" spellcheck="false" autocomplete="off"
-               placeholder="ex.: 3  ·  segredo  ·  42  ·  0x2a, 0x10">
-        <p class="dica">
-          Deixe a chave <strong>vazia</strong> para o programa testar todas as possibilidades e
-          descobrir a chave. Se souber a chave: César 1 a 25 · Vigenère letras a-z ·
-          XOR bytes 0-255 separados por vírgula · Atbash não tem chave.
-        </p>
-      </div>
-      <div>
-        <span class="rotulo">Arquivo .txt cifrado</span>
-        <div class="arquivo">
-          <button type="button" id="abrir-xor">Adicionar arquivo .txt</button>
-          <span id="nome-xor" class="discreto">nenhum arquivo</span>
-          <button type="button" id="limpar-xor" class="secundario" hidden>Remover</button>
+    <section id="painel-resultado" class="bloco" aria-live="polite">
+      <p id="resultado-vazio" class="discreto">
+        Selecione um arquivo .txt na lista e aperte <kbd>Espaço</kbd>: o programa descobre as cifras,
+        as chaves e o texto claro na hora.
+      </p>
+
+      <div id="resultado-conteudo" hidden>
+        <h2 id="resultado-titulo" class="subtitulo"></h2>
+
+        <section id="chave-encontrada" class="chave-encontrada">
+          <p class="ideal">Algoritmo ideal: <strong id="ideal-texto"></strong> <span id="ideal-tempo" class="discreto"></span></p>
+          <p id="dupla" class="selo selo-dupla" hidden>Criptografia dupla identificada: duas cifras aplicadas em sequência</p>
+          <p id="verificacao" class="verificacao"></p>
+          <table id="tabela-etapas" class="tabela">
+            <caption>Cifras e chaves, na ordem em que foram aplicadas</caption>
+            <thead><tr><th>Ordem</th><th>Cifra</th><th>Chave</th></tr></thead>
+            <tbody id="corpo-etapas"></tbody>
+          </table>
+          <table id="tabela-chave" class="tabela">
+            <caption>Valores da chave em decimal, hexadecimal e binário</caption>
+            <thead><tr><th>Valor</th><th>Decimal</th><th>Hexadecimal</th><th>Binário</th></tr></thead>
+            <tbody id="corpo-chave"></tbody>
+          </table>
+        </section>
+
+        <div class="linha-titulo">
+          <span class="rotulo">Resposta para o professor</span>
+          <div class="acoes">
+            <button type="button" id="copiar-resposta" class="secundario">Copiar resposta <kbd>Ctrl+C</kbd></button>
+            <button type="button" id="copiar-claro" class="secundario">Copiar texto claro</button>
+          </div>
         </div>
-        <p class="dica">Ao adicionar o arquivo, a análise começa sozinha e mostra o algoritmo ideal.</p>
+        <pre id="resposta" class="resultado"></pre>
+        <p id="status" class="status" role="status"></p>
+        <details id="detalhes-opcoes" class="opcoes" hidden>
+          <summary>Outras possibilidades testadas</summary>
+          <ol id="lista-opcoes"></ol>
+        </details>
       </div>
     </section>
 
-    <section class="bloco">
-      <fieldset class="modo">
-        <legend>Operação</legend>
-        <label><input type="radio" name="modo" value="decifrar" checked> Descriptografar</label>
-        <label><input type="radio" name="modo" value="cifrar"> Criptografar</label>
-      </fieldset>
+    <details id="manual" class="bloco manual">
+      <summary>Modo manual: colar o texto e escolher o algoritmo e a chave</summary>
+      <label for="manual-texto">Texto cifrado</label>
+      <textarea id="manual-texto" rows="4" spellcheck="false" placeholder="Cole o texto cifrado aqui"></textarea>
+      <label for="manual-chave">Chave (vazia = testar todas as possibilidades)</label>
+      <input id="manual-chave" type="text" spellcheck="false" autocomplete="off"
+             placeholder="ex.: 3 · segredo · 42 · 0x2a, 0x10">
       <div class="botoes">
         <button type="button" class="algoritmo" data-algoritmo="cesar">César</button>
         <button type="button" class="algoritmo" data-algoritmo="vigenere">Vigenère</button>
         <button type="button" class="algoritmo" data-algoritmo="atbash">Atbash</button>
         <button type="button" class="algoritmo" data-algoritmo="xor">XOR</button>
+        <button type="button" class="algoritmo" data-algoritmo="auto">Automático</button>
       </div>
-      <button type="button" id="automatico" class="algoritmo automatico" data-algoritmo="auto">
-        Automático: testa tudo e acha as cifras e a chave (fases 3 e 4)
-      </button>
+    </details>
+  </main>
+
+  <!-- ====================== CRIPTOGRAFAR ====================== -->
+  <main id="tela-criptografar" class="tela" role="tabpanel" hidden>
+    <section class="bloco grade">
+      <div>
+        <label for="fase">Fase do torneio</label>
+        <select id="fase">
+          <option value="1">Fase 1: 16 bits, uma cifra</option>
+          <option value="2">Fase 2: 24 bits, uma cifra</option>
+          <option value="3">Fase 3: 32 bits, até duas cifras</option>
+          <option value="4">Fase 4: 40 bits, até duas cifras</option>
+        </select>
+      </div>
+      <div>
+        <span class="rotulo">Orçamento de chave</span>
+        <p id="orcamento" class="orcamento"></p>
+      </div>
     </section>
 
     <section class="bloco">
       <div class="linha-titulo">
-        <span class="rotulo">Resultado</span>
-        <span id="titulo-resultado" class="discreto"></span>
-        <div class="acoes">
-          <button type="button" id="usar" class="secundario" disabled>Usar como entrada</button>
-          <button type="button" id="copiar" class="secundario" disabled>Copiar</button>
-          <button type="button" id="salvar" class="secundario" disabled>Salvar .txt</button>
+        <label for="claro">Texto claro</label>
+        <span id="contador" class="discreto"></span>
+        <button type="button" id="normalizar" class="secundario">Limpar texto (sem acentos, espaços e maiúsculas)</button>
+      </div>
+      <textarea id="claro" rows="5" spellcheck="false" placeholder="Digite o texto claro: 200 a 250 letras minúsculas, sem espaços"></textarea>
+      <ul id="regras-texto" class="regras"></ul>
+    </section>
+
+    <section id="passo" class="bloco">
+      <h2 id="titulo-passo" class="subtitulo"></h2>
+      <div class="grade">
+        <div>
+          <label for="cifra">Cifra</label>
+          <select id="cifra"></select>
+        </div>
+        <div>
+          <label for="chave-cifrar">Chave</label>
+          <input id="chave-cifrar" type="text" spellcheck="false" autocomplete="off">
         </div>
       </div>
-      <section id="chave-encontrada" class="chave-encontrada" hidden>
-        <p class="ideal">Algoritmo ideal: <strong id="ideal-texto"></strong> <span id="ideal-tempo" class="discreto"></span></p>
-        <p class="chave-titulo">Chave encontrada: <strong id="chave-texto"></strong></p>
-        <p class="chave-cifras">Cifras, na ordem em que foram aplicadas: <span id="cifras-texto"></span></p>
-        <table id="tabela-chave" class="tabela-chave">
-          <thead>
-            <tr><th>Valor</th><th>Decimal</th><th>Hexadecimal</th><th>Binário</th></tr>
-          </thead>
-          <tbody id="corpo-chave"></tbody>
-        </table>
-      </section>
-      <p id="status" class="status" role="status"></p>
-      <pre id="resultado" class="resultado"></pre>
-      <details id="detalhes-opcoes" class="opcoes" hidden>
-        <summary>Outras possibilidades testadas</summary>
-        <ol id="lista-opcoes"></ol>
-      </details>
+      <p id="dica-chave" class="dica"></p>
+      <p id="erro-passo" class="status erro" role="alert"></p>
+      <div class="botoes-linha">
+        <button type="button" id="btn-cifrar">Criptografar <kbd>Enter</kbd></button>
+        <button type="button" id="btn-cancelar-segunda" class="secundario" hidden>Cancelar a segunda cifra <kbd>Esc</kbd></button>
+      </div>
+    </section>
+
+    <section id="decisao" class="bloco decisao" hidden>
+      <p id="texto-decisao" class="subtitulo"></p>
+      <div class="botoes-linha" role="group" aria-label="O que fazer agora?">
+        <button type="button" id="btn-trocar" class="secundario">Trocar de criptografia <kbd>T</kbd></button>
+        <button type="button" id="btn-segunda">Aplicar uma SEGUNDA criptografia <kbd>S</kbd></button>
+        <button type="button" id="btn-reiniciar" class="secundario">Começar de novo <kbd>R</kbd></button>
+      </div>
+      <p id="motivo-segunda" class="dica"></p>
+    </section>
+
+    <section id="saida-cifra" class="bloco" hidden>
+      <h2 class="subtitulo">Texto criptografado</h2>
+      <p id="cadeia" class="chave-cifras"></p>
+      <pre id="cifrado" class="resultado"></pre>
+      <div class="botoes-linha">
+        <button type="button" id="copiar-cifrado" class="secundario">Copiar texto cifrado</button>
+        <button type="button" id="salvar-cifrado" class="secundario">Salvar texto cifrado em Downloads</button>
+        <button type="button" id="copiar-ficha" class="secundario">Copiar ficha de entrega</button>
+      </div>
+      <p id="status-cifra" class="status" role="status"></p>
+      <span class="rotulo">Ficha de entrega (o que o regulamento pede ao professor)</span>
+      <pre id="ficha" class="resultado"></pre>
     </section>
   </main>
 
-  <main id="tela-codigos" class="tela" hidden>
-    <div id="abas-codigo" class="abas-codigo"></div>
+  <!-- ====================== CODIGOS ====================== -->
+  <main id="tela-codigos" class="tela" role="tabpanel" hidden>
+    <div id="abas-codigo" class="abas-codigo" role="tablist" aria-label="Algoritmos"></div>
     <p id="info-codigo" class="discreto"></p>
-    <pre id="codigo" class="codigo"></pre>
+    <pre id="codigo" class="codigo" tabindex="0" aria-label="Código-fonte"></pre>
   </main>
+
+  <footer id="dicas" class="rodape" aria-live="off"></footer>
 
   <script src="renderer.js"></script>
 </body>

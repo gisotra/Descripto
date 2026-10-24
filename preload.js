@@ -3,8 +3,10 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('cripto', {
   executar: (pedido) => ipcRenderer.invoke('cripto:executar', pedido),
-  abrirTxt: () => ipcRenderer.invoke('cripto:abrir-txt'),
-  salvar: (conteudo) => ipcRenderer.invoke('cripto:salvar', conteudo),
+  analisarArquivo: (caminho) => ipcRenderer.invoke('cripto:analisar-arquivo', caminho),
+  listar: (caminho) => ipcRenderer.invoke('fs:listar', caminho),
+  pastaDownloads: () => ipcRenderer.invoke('fs:downloads'),
+  salvarDownloads: (nome, conteudo) => ipcRenderer.invoke('cripto:salvar-downloads', nome, conteudo),
   copiar: (conteudo) => ipcRenderer.invoke('cripto:copiar', conteudo),
   codigos: () => ipcRenderer.invoke('cripto:codigos'),
 });

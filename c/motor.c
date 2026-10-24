@@ -25,10 +25,18 @@
 #include <ctype.h>
 #include <math.h>
 
+#ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
+#endif
+
+#include "modelo_pt.h"   /* TRIGRAMA_PT: trigramas de letras do portugues */
+
 #define MAX_CHAVE_XOR 16
 #define MAX_BYTES_BUSCA_XOR 5     /* 40 bits: maior orcamento do torneio */
 #define TOLERANCIA_TAMANHO 0.02   /* ver buscar_chave_xor() */
-#define LIMIAR_PORTUGUES -3.1     /* portugues fica perto de -2.7 */
+#define LIMIAR_PORTUGUES -3.1     /* so para o XOR: frequencia de letras, portugues fica perto de -2.7 */
+#define LIMIAR_TRIGRAMA -3.4      /* portugues fica perto de -2.2; chave errada, perto de -3.7 */
 #define MAX_CHAVE_VIGENERE 8      /* maximo de letras permitido no regulamento */
 #define TOLERANCIA_VIGENERE 0.03  /* ver buscar_vigenere() */
 #define TOLERANCIA_SIMPLES 0.01   /* ver executar_automatico() */
@@ -153,35 +161,58 @@ static void preparar_frequencias(void) {
     }
 }
 
-/* Media do log da frequencia das letras: quanto maior, mais "portugues". */
-static double pontuar(const unsigned char *texto, size_t n) {
+/* Media, por letra, do log da probabilidade pelos trigramas: quanto maior, mais "portugues". */
+static double media_trigramas(const unsigned char *texto, size_t n) {
     double total = 0;
-    size_t letras = 0;
+    size_t contados = 0;
+    int a = -1, b = -1;
 
     for (size_t i = 0; i < n; i++) {
-        if (texto[i] >= 'a' && texto[i] <= 'z') {
-            total += log_frequencia[texto[i] - 'a'];
-            letras++;
+        int letra = texto[i] - 'a';
+
+        if (letra < 0 || letra > 25) {
+            a = b = -1;
+            continue;
         }
+        if (a >= 0 && b >= 0) {
+            total -= TRIGRAMA_PT[a * 676 + b * 26 + letra] / 16.0;
+            contados++;
+        }
+        a = b;
+        b = letra;
     }
-    return letras > 0 ? total / (double) letras : -100.0;
+    return contados > 0 ? total / (double) contados : -100.0;
 }
 
 /*
- * Pontuacao total do texto: soma do log da frequencia de cada letra mais
- * PESO_PALAVRA por letra que pertence a uma palavra comum do portugues.
- * Texto sem sentido (chave errada) pontua bem menos que o texto claro.
+ * Pontuacao total do texto: log da probabilidade de cada letra dadas as duas
+ * anteriores (trigramas do portugues, ver modelo_pt.h) mais PESO_PALAVRA por
+ * letra que pertence a uma palavra comum. Texto sem sentido (chave errada)
+ * pontua bem menos que o texto claro. Os trigramas reconhecem portugues mesmo
+ * quando o texto tem palavras raras (waffle, yakisoba), que enganam um
+ * criterio baseado so na frequencia de cada letra.
  */
 static double pontuacao(const unsigned char *texto, size_t n) {
     static unsigned char coberto[MAX_PONTUADO];
     size_t m = n < MAX_PONTUADO ? n : MAX_PONTUADO;
     size_t cobertos = 0;
     double total = 0;
+    int a = -1, b = -1;     /* duas letras anteriores (-1 = inicio do texto ou nao-letra) */
 
     for (size_t i = 0; i < n; i++) {
-        if (texto[i] >= 'a' && texto[i] <= 'z') {
-            total += log_frequencia[texto[i] - 'a'];
+        int letra = texto[i] - 'a';
+
+        if (letra < 0 || letra > 25) {
+            a = b = -1;
+            continue;
         }
+        if (a >= 0 && b >= 0) {
+            total -= TRIGRAMA_PT[a * 676 + b * 26 + letra] / 16.0;
+        } else {
+            total += log_frequencia[letra];
+        }
+        a = b;
+        b = letra;
     }
     memset(coberto, 0, m);
     for (size_t i = 0; i < m; i++) {
@@ -233,7 +264,7 @@ static void emitir_opcao(const char *descricao, const unsigned char *texto, size
 }
 
 static void avisar_se_nao_parece_portugues(const unsigned char *texto, size_t n) {
-    if (pontuar(texto, n) < LIMIAR_PORTUGUES) {
+    if (media_trigramas(texto, n) < LIMIAR_TRIGRAMA) {
         fprintf(stderr, "O resultado não parece português: o texto pode ser curto demais ou "
                         "usar outra combinação de cifras.\n");
     }
@@ -1130,13 +1161,14 @@ typedef struct {
     int complexidade;                /* menos cifras = menor */
     char cifras[96];                 /* vazio = nenhuma cifra alem do XOR */
     char chaves[128];
+    int tipo;                        /* 0 nenhuma, 1 Atbash, 2 Vigenere/Cesar, 3 Vigenere/Cesar e depois Atbash */
     int tam_vigenere;                /* 0 = sem Vigenere/Cesar */
     int desl[MAX_CHAVE_VIGENERE];
     unsigned char *texto;
     size_t n;
 } Candidato;
 
-static int novo_candidato(Candidato *c, const unsigned char *texto, size_t n, int complexidade,
+static int novo_candidato(Candidato *c, const unsigned char *texto, size_t n, int complexidade, int tipo,
                           const char *cifras, const char *chaves) {
     c->texto = malloc(n > 0 ? n : 1);
     if (c->texto == NULL) {
@@ -1146,6 +1178,7 @@ static int novo_candidato(Candidato *c, const unsigned char *texto, size_t n, in
     c->n = n;
     c->pontos = pontuacao(texto, n);
     c->complexidade = complexidade;
+    c->tipo = tipo;
     c->tam_vigenere = 0;
     snprintf(c->cifras, sizeof c->cifras, "%s", cifras);
     snprintf(c->chaves, sizeof c->chaves, "%s", chaves);
@@ -1170,11 +1203,11 @@ static int analisar_letras(const unsigned char *y, size_t n, int com_xor, Candid
         for (size_t i = 0; i < n; i++) {
             invertido[i] = (unsigned char) ('z' - (y[i] - 'a'));
         }
-        ok = novo_candidato(&lista[*qtd], y, n, 0, "", "");
+        ok = novo_candidato(&lista[*qtd], y, n, 0, 0, "", "");
         (*qtd) += ok;
     }
     if (ok) {
-        ok = novo_candidato(&lista[*qtd], invertido, n, 1, "Atbash", "Atbash: sem chave");
+        ok = novo_candidato(&lista[*qtd], invertido, n, 1, 1, "Atbash", "Atbash: sem chave");
         (*qtd) += ok;
     }
     for (int perfil = 0; ok && perfil < (com_xor ? 1 : 2); perfil++) {
@@ -1203,7 +1236,7 @@ static int analisar_letras(const unsigned char *y, size_t n, int com_xor, Candid
         }
         snprintf(cifras, sizeof cifras, perfil ? "%s → Atbash" : "%s", nome);
         snprintf(chaves, sizeof chaves, perfil ? "%s: %s · Atbash: sem chave" : "%s: %s", nome, valor);
-        ok = novo_candidato(&lista[*qtd], tentativa, n, (perfil ? 3 : 2) + (k.tam > 1), cifras, chaves);
+        ok = novo_candidato(&lista[*qtd], tentativa, n, (perfil ? 3 : 2) + (k.tam > 1), perfil ? 3 : 2, cifras, chaves);
         if (ok) {
             lista[*qtd].tam_vigenere = k.tam;
             memcpy(lista[*qtd].desl, k.desl, sizeof(int) * (size_t) k.tam);
@@ -1228,6 +1261,69 @@ static void montar_cadeia(const Candidato *c, int com_xor, const char *chave_xor
         snprintf(cifras, cap_cifras, "%s", c->cifras);
         snprintf(chaves, cap_chaves, "%s", c->chaves);
     }
+}
+
+/* Mesma conta do vigenere.c ao cifrar: letra + chave. So para texto a-z (pode ser no proprio buffer). */
+static void vigenere_cifrar_buffer(const unsigned char *origem, size_t n, const int *desl, int tam,
+                                   unsigned char *destino) {
+    for (size_t i = 0; i < n; i++) {
+        destino[i] = (unsigned char) ('a' + ((origem[i] - 'a') + desl[i % (size_t) tam]) % 26);
+    }
+}
+
+/* Cifras e chaves na ordem em que foram aplicadas (formato exigido pelo regulamento). */
+static void emitir_etapas(const Candidato *c, int com_xor, const char *chave_xor) {
+    if (c->tipo == 2 || c->tipo == 3) {
+        if (c->tam_vigenere == 1) {
+            fprintf(stderr, "@etapa César | %d\n", c->desl[0]);
+        } else {
+            ChaveVigenere k;
+            char senha[MAX_CHAVE_VIGENERE + 1];
+
+            k.tam = c->tam_vigenere;
+            memcpy(k.desl, c->desl, sizeof(int) * (size_t) k.tam);
+            vigenere_para_texto(&k, senha);
+            fprintf(stderr, "@etapa Vigenère | %s\n", senha);
+        }
+    }
+    if (c->tipo == 1 || c->tipo == 3) {
+        fprintf(stderr, "@etapa Atbash | sem chave\n");
+    }
+    if (com_xor) {
+        fprintf(stderr, "@etapa XOR | %s\n", chave_xor);
+    }
+}
+
+/*
+ * Prova real: cifra o texto claro encontrado com as cifras e chaves achadas e
+ * compara com o arquivo recebido. E o que o regulamento exige da resposta.
+ * Uma quebra de linha no fim do arquivo e ignorada.
+ */
+static int verificar_cadeia(const Candidato *c, const XorBusca *xr, int com_xor,
+                            const unsigned char *alvo, size_t n_alvo) {
+    unsigned char *a = malloc(c->n > 0 ? c->n : 1);
+    int igual;
+
+    if (a == NULL) {
+        return 0;
+    }
+    memcpy(a, c->texto, c->n);
+    if (c->tipo == 2 || c->tipo == 3) {
+        vigenere_cifrar_buffer(a, c->n, c->desl, c->tam_vigenere, a);
+    }
+    if (c->tipo == 1 || c->tipo == 3) {
+        for (size_t i = 0; i < c->n; i++) {
+            a[i] = (unsigned char) ('z' - (a[i] - 'a'));
+        }
+    }
+    if (com_xor) {
+        for (size_t i = 0; i < c->n; i++) {
+            a[i] ^= xr->chave[i % xr->tam];
+        }
+    }
+    igual = (n_alvo == c->n || (n_alvo == c->n + 1 && alvo[n_alvo - 1] == '\n')) && memcmp(a, alvo, c->n) == 0;
+    free(a);
+    return igual;
 }
 
 /* Maior pontuacao; se uma cifra mais simples chega perto, prefere a simples. */
@@ -1258,6 +1354,8 @@ static int executar_automatico(unsigned char *entrada, size_t n_bruto) {
     long qtd_cod = 0;
     unsigned char *cod = NULL, *base = entrada;
     char chave_xor[96] = "";
+
+    memset(&xr, 0, sizeof xr);
 
     if (n == 0) {
         fprintf(stderr, "Erro: o texto/arquivo está vazio.\n");
@@ -1354,6 +1452,10 @@ static int executar_automatico(unsigned char *entrada, size_t n_bruto) {
         montar_cadeia(&lista[escolhido], com_xor, chave_xor, cifras, sizeof cifras, chaves, sizeof chaves);
         fprintf(stderr, "@cifras %s\n@chave %s\n", cifras, chaves);
     }
+    emitir_etapas(&lista[escolhido], com_xor, chave_xor);
+    fprintf(stderr, "@verificado %s\n",
+            (com_xor ? verificar_cadeia(&lista[escolhido], &xr, 1, cod, (size_t) qtd_cod)
+                     : verificar_cadeia(&lista[escolhido], &xr, 0, entrada, n)) ? "sim" : "nao");
     if (lista[escolhido].tam_vigenere == 1) {
         emitir_valor("César deslocamento", lista[escolhido].desl[0], 5);
     } else if (lista[escolhido].tam_vigenere > 1) {
@@ -1414,6 +1516,11 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "Erro: modo inválido '%s'.\n", modo);
         return 2;
     }
+
+#ifdef _WIN32
+    _setmode(_fileno(stdin), _O_BINARY);    /* sem isso o Windows troca \n por \r\n e estraga o XOR */
+    _setmode(_fileno(stdout), _O_BINARY);
+#endif
 
     size_t n;
     unsigned char *texto = ler_entrada(&n);

@@ -1,13 +1,14 @@
-// Processo principal do Electron: abre a janela e executa o motor em C.
-const { app, BrowserWindow, ipcMain, dialog, clipboard } = require('electron');
+// Processo principal do Electron: abre a janela, navega nas pastas e executa o motor em C.
+const { app, BrowserWindow, Menu, ipcMain, clipboard } = require('electron');
 const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
-const MOTOR = path.join(__dirname, 'bin', 'motor');
+const MOTOR = path.join(__dirname, 'bin', process.platform === 'win32' ? 'motor.exe' : 'motor');
 const ALGORITMOS = ['cesar', 'vigenere', 'atbash', 'xor', 'auto'];
 const MODOS = ['cifrar', 'decifrar'];
 const TEMPO_LIMITE_MS = 15000;
+const TAMANHO_MAXIMO = 5 * 1024 * 1024;
 
 const CODIGOS = [
   { id: 'cesar', nome: 'César', arquivo: 'algoritmos/caesar.c', original: true },
@@ -17,18 +18,15 @@ const CODIGOS = [
   { id: 'motor', nome: 'motor.c (usado pela interface)', arquivo: 'c/motor.c', original: false },
 ];
 
-// Só arquivos escolhidos pelo usuário na janela de seleção podem ser lidos.
-const arquivosPermitidos = new Set();
 let janela = null;
 
 function criarJanela() {
   janela = new BrowserWindow({
-    width: 1000,
-    height: 800,
-    minWidth: 720,
-    minHeight: 560,
+    width: 1100,
+    height: 860,
+    minWidth: 760,
+    minHeight: 600,
     title: 'Torneio de Criptografia',
-    autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -46,7 +44,7 @@ function executarMotor(args, entrada) {
   return new Promise((resolve) => {
     const saida = [];
     const erros = [];
-    const processo = spawn(MOTOR, args, { timeout: TEMPO_LIMITE_MS });
+    const processo = spawn(MOTOR, args, { timeout: TEMPO_LIMITE_MS, windowsHide: true });
 
     processo.stdout.on('data', (dados) => saida.push(dados));
     processo.stderr.on('data', (dados) => erros.push(dados));
@@ -55,7 +53,7 @@ function executarMotor(args, entrada) {
       resolve({ ok: false, saida: '', mensagem: `Não foi possível executar o motor em C: ${erro.message}` });
     });
     processo.on('close', (codigo, sinal) => {
-      const mensagem = Buffer.concat(erros).toString('utf8').trim();
+      const mensagem = Buffer.concat(erros).toString('utf8').replace(/\r/g, '').trim();
       if (sinal) {
         resolve({ ok: false, saida: '', mensagem: 'O motor em C demorou demais e foi interrompido.' });
         return;
@@ -67,72 +65,175 @@ function executarMotor(args, entrada) {
   });
 }
 
+// Pasta Downloads do usuário (no Mint pode se chamar "Transferências"). Em sistemas sem as pastas
+// do usuário configuradas o Electron devolve a pasta pessoal; nesse caso usa ~/Downloads se existir.
+function pastaDownloads() {
+  const casa = path.resolve(app.getPath('home'));
+  const informada = app.getPath('downloads');
+  if (path.resolve(informada) !== casa) {
+    return informada;
+  }
+  const padrao = path.join(casa, 'Downloads');
+  return fs.existsSync(padrao) ? padrao : informada;
+}
+
+function motorDisponivel() {
+  return fs.existsSync(MOTOR);
+}
+
+// Texto digitado ou colado (modo manual e etapas de criptografia).
 ipcMain.handle('cripto:executar', async (_evento, pedido) => {
-  const { algoritmo, modo, chave = '', texto = '', arquivo = null } = pedido || {};
+  const { algoritmo, modo, chave = '', texto = '' } = pedido || {};
 
   if (!ALGORITMOS.includes(algoritmo) || !MODOS.includes(modo)) {
     return { ok: false, saida: '', mensagem: 'Pedido inválido.' };
   }
-  if (!fs.existsSync(MOTOR)) {
+  if (!motorDisponivel()) {
+    return { ok: false, saida: '', mensagem: 'O motor em C não foi compilado. Rode: npm run build' };
+  }
+  return executarMotor([algoritmo, modo, String(chave)], Buffer.from(String(texto), 'utf8'));
+});
+
+// Arquivo .txt escolhido no navegador: lê os bytes inteiros e roda o modo automático.
+ipcMain.handle('cripto:analisar-arquivo', async (_evento, caminho) => {
+  const inicio = process.hrtime.bigint();
+
+  if (typeof caminho !== 'string' || path.extname(caminho).toLowerCase() !== '.txt') {
+    return { ok: false, saida: '', mensagem: 'Escolha um arquivo .txt.' };
+  }
+  if (!motorDisponivel()) {
     return { ok: false, saida: '', mensagem: 'O motor em C não foi compilado. Rode: npm run build' };
   }
 
-  let entrada;
-  if (arquivo) {
-    if (!arquivosPermitidos.has(arquivo)) {
-      return { ok: false, saida: '', mensagem: 'Selecione o arquivo novamente.' };
+  let bytes;
+  try {
+    const info = await fs.promises.stat(caminho);
+    if (!info.isFile()) {
+      return { ok: false, saida: '', mensagem: 'Isso não é um arquivo.' };
     }
-    try {
-      entrada = await fs.promises.readFile(arquivo); // bytes crus, arquivo inteiro
-    } catch (erro) {
-      return { ok: false, saida: '', mensagem: `Não foi possível ler o arquivo: ${erro.message}` };
+    if (info.size > TAMANHO_MAXIMO) {
+      return { ok: false, saida: '', mensagem: 'O arquivo é grande demais (máximo 5 MB).' };
+    }
+    bytes = await fs.promises.readFile(caminho); // bytes crus: o arquivo é lido por inteiro
+  } catch (erro) {
+    return { ok: false, saida: '', mensagem: `Não foi possível ler o arquivo: ${erro.message}` };
+  }
+
+  const resposta = await executarMotor(['auto', 'decifrar', ''], bytes);
+  const ms = Number((process.hrtime.bigint() - inicio) / 1000000n);
+  return { ...resposta, nome: path.basename(caminho), tamanho: bytes.length, ms };
+});
+
+// ---------- navegador de pastas (setas do teclado) ----------
+async function existe(caminho) {
+  try {
+    await fs.promises.access(caminho);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function listarLugares() {
+  const candidatos = [
+    ['Downloads', pastaDownloads()],
+    ['Área de trabalho', app.getPath('desktop')],
+    ['Documentos', app.getPath('documents')],
+    ['Pasta pessoal', app.getPath('home')],
+  ];
+  if (process.platform === 'win32') {
+    for (let codigo = 65; codigo <= 90; codigo++) {
+      const letra = String.fromCharCode(codigo);
+      candidatos.push([`Disco ${letra}:`, `${letra}:\\`]);
     }
   } else {
-    entrada = Buffer.from(String(texto), 'utf8');
+    candidatos.push(['Sistema de arquivos (/)', '/']);
   }
 
-  return executarMotor([algoritmo, modo, String(chave)], entrada);
-});
+  const existentes = await Promise.all(candidatos.map(([, caminho]) => existe(caminho)));
+  return candidatos
+    .filter((_, i) => existentes[i])
+    .map(([nome, caminho]) => ({ nome, caminho, tipo: 'pasta' }));
+}
 
-ipcMain.handle('cripto:abrir-txt', async () => {
-  const escolha = await dialog.showOpenDialog(janela, {
-    title: 'Adicionar arquivo .txt',
-    properties: ['openFile'],
-    filters: [
-      { name: 'Arquivos de texto', extensions: ['txt'] },
-      { name: 'Todos os arquivos', extensions: ['*'] },
-    ],
-  });
-  if (escolha.canceled || escolha.filePaths.length === 0) {
-    return null;
+const comparar = new Intl.Collator('pt-BR', { sensitivity: 'base', numeric: true }).compare;
+
+async function listarPasta(pedido) {
+  if (!pedido) {
+    return { caminho: '', titulo: 'Lugares', pai: null, entradas: await listarLugares() };
   }
 
-  const caminho = escolha.filePaths[0];
+  const dir = path.resolve(String(pedido));
+  let itens;
   try {
-    const conteudo = await fs.promises.readFile(caminho, 'utf8');
-    arquivosPermitidos.add(caminho);
-    return { caminho, nome: path.basename(caminho), conteudo };
+    itens = await fs.promises.readdir(dir, { withFileTypes: true });
   } catch (erro) {
-    return { erro: `Não foi possível ler o arquivo: ${erro.message}` };
+    return { erro: `Não foi possível abrir a pasta: ${erro.message}` };
   }
-});
 
-ipcMain.handle('cripto:salvar', async (_evento, conteudo) => {
-  const escolha = await dialog.showSaveDialog(janela, {
-    title: 'Salvar resultado',
-    defaultPath: 'resultado.txt',
-    filters: [{ name: 'Arquivos de texto', extensions: ['txt'] }],
+  const entradas = [];
+  await Promise.all(
+    itens.map(async (item) => {
+      if (item.name.startsWith('.')) {
+        return;
+      }
+      const completo = path.join(dir, item.name);
+      try {
+        let info = null;
+        if (item.isSymbolicLink()) {
+          info = await fs.promises.stat(completo);
+        }
+        if (item.isDirectory() || (info && info.isDirectory())) {
+          entradas.push({ nome: item.name, caminho: completo, tipo: 'pasta' });
+        } else if ((item.isFile() || (info && info.isFile())) && /\.txt$/i.test(item.name)) {
+          info = info || (await fs.promises.stat(completo));
+          entradas.push({
+            nome: item.name,
+            caminho: completo,
+            tipo: 'arquivo',
+            tamanho: info.size,
+            modificado: info.mtimeMs,
+          });
+        }
+      } catch {
+        // sem permissão ou link quebrado: ignora o item
+      }
+    }),
+  );
+
+  // Pastas em ordem alfabética; arquivos .txt do mais recente para o mais antigo.
+  entradas.sort((a, b) => {
+    if (a.tipo !== b.tipo) {
+      return a.tipo === 'pasta' ? -1 : 1;
+    }
+    return a.tipo === 'pasta' ? comparar(a.nome, b.nome) : b.modificado - a.modificado;
   });
-  if (escolha.canceled || !escolha.filePath) {
-    return { salvo: false };
-  }
 
-  try {
-    await fs.promises.writeFile(escolha.filePath, String(conteudo), 'utf8');
-    return { salvo: true, caminho: escolha.filePath };
-  } catch (erro) {
-    return { salvo: false, erro: `Não foi possível salvar: ${erro.message}` };
+  const raiz = path.parse(dir).root;
+  return { caminho: dir, titulo: dir, pai: dir === raiz ? '' : path.dirname(dir), entradas };
+}
+
+ipcMain.handle('fs:listar', (_evento, caminho) => listarPasta(caminho));
+
+ipcMain.handle('fs:downloads', () => pastaDownloads());
+
+// Salva direto na pasta Downloads (sem janela de diálogo), sem sobrescrever nada.
+ipcMain.handle('cripto:salvar-downloads', async (_evento, nome, conteudo) => {
+  const limpo = path.basename(String(nome)).replace(/[^\w.\-]+/g, '_') || 'resultado.txt';
+  const { name, ext } = path.parse(limpo);
+
+  for (let tentativa = 1; tentativa < 1000; tentativa++) {
+    const arquivo = path.join(pastaDownloads(), tentativa === 1 ? limpo : `${name}-${tentativa}${ext}`);
+    try {
+      await fs.promises.writeFile(arquivo, String(conteudo), { encoding: 'utf8', flag: 'wx' });
+      return { salvo: true, caminho: arquivo };
+    } catch (erro) {
+      if (erro.code !== 'EEXIST') {
+        return { salvo: false, erro: `Não foi possível salvar: ${erro.message}` };
+      }
+    }
   }
+  return { salvo: false, erro: 'Já existem arquivos demais com esse nome.' };
 });
 
 ipcMain.handle('cripto:copiar', (_evento, conteudo) => {
@@ -154,6 +255,7 @@ ipcMain.handle('cripto:codigos', () =>
 );
 
 app.whenReady().then(() => {
+  Menu.setApplicationMenu(null); // sem barra de menus: a tecla Alt não interfere nos atalhos
   criarJanela();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
