@@ -1,4 +1,4 @@
-// Hash do código-fonte do motor (c/motor.c + c/modelo_pt.h), sem os \r (o Git no Windows pode
+// Hash do código-fonte do motor (c/motor.c + c/modelo_pt.h + c/modelo_en.h), sem os \r (o Git no Windows pode
 // trocar \n por \r\n). Usado pelo build-c.js para saber se o motor.exe pré-compilado está em dia.
 //
 // Depois de compilar um novo prebuilt/motor-windows-x64.exe, grave o hash com:
@@ -14,6 +14,7 @@ function hashDoFonte() {
   const dados = Buffer.concat([
     fs.readFileSync(path.join(raiz, 'c', 'motor.c')),
     fs.readFileSync(path.join(raiz, 'c', 'modelo_pt.h')),
+    fs.readFileSync(path.join(raiz, 'c', 'modelo_en.h')),
   ]);
   const semCR = Buffer.from(dados.filter((byte) => byte !== 0x0d));
   return crypto.createHash('sha256').update(semCR).digest('hex');

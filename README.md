@@ -67,12 +67,35 @@ node scripts/hash-fonte.js
    - a **resposta para o professor** (texto claro, cifras na ordem e chaves), pronta para copiar;
    - as outras possibilidades testadas.
 
-O modo automático testa XOR (1 a 5 bytes, todas as combinações) como última cifra, e Atbash,
-César e Vigenère (1 a 8 letras), incluindo as combinações de duas cifras diferentes. Cada
-possibilidade recebe uma pontuação de "parece português" (trigramas de letras + palavras
-comuns) e vence a de maior pontuação. Como algumas cadeias são equivalentes (por exemplo
-César + Atbash = Atbash + César com outra chave), a resposta pode vir na ordem equivalente:
-a verificação garante que ela reproduz o arquivo.
+### Como a descriptografia em camadas funciona
+
+O programa **não assume uma cifra só**. Para o texto cifrado (ou para o que sobra depois de desfazer o XOR):
+
+1. **Evidências estatísticas:** índice de coincidência (IC) do texto, IC médio das colunas para estimar o
+   período da chave de Vigenère e média de trigramas de letras em português e em inglês.
+2. **Hipóteses para a camada mais externa:** Atbash, os 25 deslocamentos de César e a chave de Vigenère
+   que melhor ajusta cada coluna (de 2 até `--max-periodo` letras, com refinamento letra a letra).
+3. **Avaliação do resultado intermediário:** cada hipótese desfaz uma camada e o texto resultante é avaliado.
+   Uma busca em feixe (3 hipóteses por nível) repete o processo enquanto houver evidência de outra camada,
+   até `--max-camadas` camadas.
+4. **Parada só com texto natural:** um texto só é aceito se a média de trigramas passar de um **limiar
+   calibrado por simulação** (depende do tamanho do texto). Letras que "parecem válidas" não bastam.
+5. **Prova real:** a cadeia encontrada é aplicada de volta ao texto claro e tem de reproduzir exatamente o arquivo.
+
+Se nada passa do limiar, o resultado é **inconclusivo**: o programa **não mostra texto algum como resultado**
+(só a melhor tentativa, marcada como baixa confiança) e explica o motivo (texto curto, cifra não suportada,
+chave maior que o limite, tempo esgotado).
+
+**O que o texto cifrado prova, e o que não prova.** César e Vigenère somam deslocamentos (e o Atbash só inverte o
+alfabeto), então qualquer sequência dessas cifras equivale a **uma só transformação**: um Vigenère de chave
+composta, talvez seguido de Atbash. César(3) e depois Vigenère("abc"), Vigenère("abc") e depois César(3) e
+Vigenère("def") dão **exatamente o mesmo texto cifrado**, e há 26 divisões equivalentes do deslocamento. Por isso o
+programa mostra a **camada efetiva** (provada) e, quando há deslocamento em comum na chave, uma **decomposição
+compatível em duas camadas** (César interna e Vigenère externa, por convenção), claramente marcada como não
+identificável. O XOR, que não comuta com as outras, é identificado como a última camada.
+
+Opções do motor (`bin/motor auto decifrar`): `--max-camadas 1-4` (padrão 3), `--max-periodo 1-24` (padrão 8, o
+máximo do regulamento) e `--tempo-ms` (padrão 3000). No modo manual da tela os dois primeiros têm campos próprios.
 
 O **modo manual** (embaixo da lista) permite colar o texto e escolher o algoritmo e a chave;
 com a chave vazia ele testa todas as possibilidades daquela cifra.
@@ -96,7 +119,10 @@ quebra de linha final.
 ```
 algoritmos/         os 4 códigos originais, SEM modificação (mostrados na tela "Códigos")
 c/motor.c           programa em C que a interface executa
-c/modelo_pt.h       tabela de trigramas de letras do português (gerada de texto da Wikipédia e de Dom Casmurro)
+c/modelo_pt.h       trigramas de letras do português (gerados de texto da Wikipédia e de Dom Casmurro)
+c/modelo_en.h       trigramas de letras do inglês (gerados de livros do Project Gutenberg)
+tests/              testes automatizados e a calibração do limiar
+scripts/gerar-modelo-trigramas.py  gera as tabelas de trigramas
 scripts/build-c.js  compila o motor com o gcc (ou usa o .exe pré-compilado no Windows)
 prebuilt/           motor.exe pré-compilado para Windows e o hash do código-fonte de onde ele veio
 scripts/preparar.js instala as dependências na primeira execução
@@ -129,15 +155,32 @@ bin/motor auto decifrar < desafio.txt          # testa tudo e descreve as cifras
 O `motor.c` lê o arquivo inteiro uma vez, converte de UTF-8 para os códigos 0-255
 e corrige os três pontos. O `xor.c` original continua igual.
 
+## Testes
+
+```bash
+npm test          # compila o motor e roda tests/*.test.js (node:test, sem dependências)
+npm run calibrar  # recalibra o limiar de "texto natural" (demora cerca de 1 minuto)
+```
+
+Os textos cifrados dos testes vêm de implementações de referência em JS (`tests/cifras.js`) que **não usam o
+motor**, e as cifras e chaves que o motor reporta são reaplicadas por elas ao texto claro. A suíte cobre
+cifras isoladas, César e Vigenère nas duas ordens, combinações com Atbash, três camadas, chave desconhecida,
+texto curto, textos sem solução (aleatório, Vigenère de 12 e 20 letras, substituição, embaralhado), limites de
+camadas, período e tempo, e a compatibilidade com XOR e com os botões individuais.
+
 ## Limites conhecidos
 
-- A escolha da chave é estatística: com textos curtos pode errar. Nos testes (cerca de 2000
-  desafios com textos de 175 a 230 letras) o texto voltou idêntico em mais de 99,8%.
+- **Ordem não identificável:** ver acima. A divisão da chave entre César e Vigenère é uma convenção.
+- A escolha da chave é estatística. **Abaixo de 55 letras o resultado é sempre inconclusivo** e, até uns 80,
+  a margem é pequena. Para textos de 175 a 250 letras o texto voltou idêntico em mais de 99,8% dos testes.
+- O limiar de "natural" foi calibrado com português e inglês. Outro idioma, ou texto sem sentido, pode
+  ficar inconclusivo (ou, se for parecido com português/inglês, ser aceito com o idioma errado).
+- Vigenère de chave maior que `--max-periodo` e duas cifras de Vigenère em sequência (período = mmc das chaves)
+  só são resolvidos se o limite for aumentado, e com poucas letras por coluna a confiança cai.
+- Só são analisadas Atbash, César e Vigenère (e o XOR, por último); outras cifras clássicas ficam inconclusivas.
 - Se o último byte **cifrado** do XOR for `0x0A` (quebra de linha), o regulamento manda ignorá-lo
   e a última letra se perde; a tela avisa qual seria a letra.
 - O Vigenère e as combinações só são descobertos quando o texto (antes do XOR) tem apenas letras a-z.
-- O modelo de português foi treinado em textos gerais; palavras muito raras ou em outros
-  idiomas pesam menos, mas não impedem a descoberta da chave (testado com *waffle*, *yakisoba*, *kiwi*).
 
 ## Observação sobre o `--no-sandbox`
 

@@ -33,18 +33,40 @@
         as chaves e o texto claro na hora.
       </p>
 
+      <div id="resultado-inconclusivo" class="inconclusivo" hidden>
+        <h2 id="inconclusivo-titulo" class="subtitulo"></h2>
+        <p id="inconclusivo-motivo"></p>
+        <p class="discreto">O programa só mostra um texto como resultado quando ele é claramente texto natural. Aqui nenhum candidato passou do limiar,
+          então nada foi apresentado como descriptografia.</p>
+        <ul id="inconclusivo-evidencias" class="evidencias"></ul>
+        <p id="inconclusivo-pontuacao" class="discreto"></p>
+        <details id="inconclusivo-tentativa" class="opcoes">
+          <summary>Melhor tentativa (baixa confiança, não é um resultado)</summary>
+          <pre id="inconclusivo-texto" class="resultado"></pre>
+        </details>
+      </div>
+
       <div id="resultado-conteudo" hidden>
         <h2 id="resultado-titulo" class="subtitulo"></h2>
 
         <section id="chave-encontrada" class="chave-encontrada">
           <p class="ideal">Algoritmo ideal: <strong id="ideal-texto"></strong> <span id="ideal-tempo" class="discreto"></span></p>
           <p id="dupla" class="selo selo-dupla" hidden>Criptografia dupla identificada: duas cifras aplicadas em sequência</p>
+          <p id="confianca" class="confianca"></p>
           <p id="verificacao" class="verificacao"></p>
           <table id="tabela-etapas" class="tabela">
             <caption>Cifras e chaves, na ordem em que foram aplicadas</caption>
             <thead><tr><th>Ordem</th><th>Cifra</th><th>Chave</th></tr></thead>
             <tbody id="corpo-etapas"></tbody>
           </table>
+          <p id="decomposicao" class="decomposicao" hidden></p>
+          <p id="nota-camadas" class="discreto" hidden></p>
+          <table id="tabela-passos" class="tabela">
+            <caption>Como o texto foi descriptografado, na ordem inversa da cifragem, e a avaliação de cada resultado</caption>
+            <thead><tr><th>Passo</th><th>O que foi feito</th><th>IC</th><th>Média de trigramas</th><th>Idioma</th><th>Avaliação</th></tr></thead>
+            <tbody id="corpo-passos"></tbody>
+          </table>
+          <ul id="lista-evidencias" class="evidencias"></ul>
           <table id="tabela-chave" class="tabela">
             <caption>Valores da chave em decimal, hexadecimal e binário</caption>
             <thead><tr><th>Valor</th><th>Decimal</th><th>Hexadecimal</th><th>Binário</th></tr></thead>
@@ -72,6 +94,16 @@
       <summary>Modo manual: colar o texto e escolher o algoritmo e a chave</summary>
       <label for="manual-texto">Texto cifrado</label>
       <textarea id="manual-texto" rows="4" spellcheck="false" placeholder="Cole o texto cifrado aqui"></textarea>
+      <div class="grade">
+        <div>
+          <label for="manual-camadas">Máximo de camadas (cifras em sequência)</label>
+          <input id="manual-camadas" type="number" min="1" max="4" value="3">
+        </div>
+        <div>
+          <label for="manual-periodo">Máximo de letras da chave de Vigenère</label>
+          <input id="manual-periodo" type="number" min="1" max="24" value="8">
+        </div>
+      </div>
       <label for="manual-chave">Chave (vazia = testar todas as possibilidades)</label>
       <input id="manual-chave" type="text" spellcheck="false" autocomplete="off"
              placeholder="ex.: 3 · segredo · 42 · 0x2a, 0x10">

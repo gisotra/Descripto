@@ -83,7 +83,7 @@ function motorDisponivel() {
 
 // Texto digitado ou colado (modo manual e etapas de criptografia).
 ipcMain.handle('cripto:executar', async (_evento, pedido) => {
-  const { algoritmo, modo, chave = '', texto = '' } = pedido || {};
+  const { algoritmo, modo, chave = '', texto = '', maxCamadas, maxPeriodo } = pedido || {};
 
   if (!ALGORITMOS.includes(algoritmo) || !MODOS.includes(modo)) {
     return { ok: false, saida: '', mensagem: 'Pedido inválido.' };
@@ -91,7 +91,15 @@ ipcMain.handle('cripto:executar', async (_evento, pedido) => {
   if (!motorDisponivel()) {
     return { ok: false, saida: '', mensagem: 'O motor em C não foi compilado. Rode: npm run build' };
   }
-  return executarMotor([algoritmo, modo, String(chave)], Buffer.from(String(texto), 'utf8'));
+  const args = [algoritmo, modo, String(chave)];
+  // limites da análise em camadas (só valem para o modo automático)
+  if (algoritmo === 'auto' && Number.isInteger(maxCamadas) && maxCamadas >= 1 && maxCamadas <= 4) {
+    args.push('--max-camadas', String(maxCamadas));
+  }
+  if (algoritmo === 'auto' && Number.isInteger(maxPeriodo) && maxPeriodo >= 1 && maxPeriodo <= 24) {
+    args.push('--max-periodo', String(maxPeriodo));
+  }
+  return executarMotor(args, Buffer.from(String(texto), 'utf8'));
 });
 
 // Arquivo .txt escolhido no navegador: lê os bytes inteiros e roda o modo automático.

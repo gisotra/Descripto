@@ -8,7 +8,10 @@
     "build": "node scripts/build-c.js",
     "preelectron": "node scripts/preparar.js",
     "electron": "npm run build && electron . --no-sandbox",
-    "start": "npm run electron"
+    "start": "npm run electron",
+    "pretest": "node scripts/build-c.js",
+    "test": "node --test tests/multicamadas.test.js tests/compatibilidade.test.js",
+    "calibrar": "node tests/calibracao.js"
   },
   "devDependencies": {
     "electron": "^37.10.3"

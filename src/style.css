@@ -312,6 +312,35 @@ button:disabled {
   color: var(--destaque-texto);
 }
 
+.confianca {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.decomposicao {
+  padding: 8px 10px;
+  border-left: 4px solid var(--destaque);
+  background: var(--fundo);
+  font-size: 13px;
+}
+
+.evidencias {
+  margin: 0 0 8px;
+  padding-left: 18px;
+  font-size: 12px;
+  color: var(--discreto);
+}
+
+.inconclusivo {
+  padding: 10px 12px;
+  border: 2px solid var(--aviso);
+  border-radius: 6px;
+}
+
+.inconclusivo .subtitulo {
+  color: var(--aviso);
+}
+
 .verificacao {
   font-size: 13px;
   font-weight: 600;
@@ -428,6 +457,15 @@ button:disabled {
 .manual textarea,
 .manual input {
   margin-bottom: 10px;
+}
+
+.manual input[type="number"] {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--borda);
+  border-radius: 6px;
+  background: var(--fundo);
+  color: var(--texto);
 }
 
 /* ---------- criptografar ---------- */

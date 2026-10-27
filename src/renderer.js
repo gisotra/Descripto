@@ -320,7 +320,10 @@ const estadoResultado = { claro: '', resposta: '' };
 // O motor escreve no stderr linhas que começam com @ (cifras, etapas, chave,
 // valores, verificação e outras possibilidades); o resto são avisos.
 function interpretarMensagem(mensagem) {
-  const info = { cifras: '', chave: '', etapas: [], valores: [], opcoes: [], avisos: [], verificado: '' };
+  const info = {
+    cifras: '', chave: '', etapas: [], valores: [], opcoes: [], avisos: [], verificado: '',
+    status: '', detalheStatus: '', idioma: '', pontuacao: null, evidencias: [], passos: [], decomposicao: '', nota: '',
+  };
 
   (mensagem || '').split('\n').forEach((linha) => {
     if (linha.startsWith('@cifras ')) {
@@ -332,6 +335,24 @@ function interpretarMensagem(mensagem) {
       info.etapas.push({ cifra, chave });
     } else if (linha.startsWith('@verificado ')) {
       info.verificado = linha.slice(12).trim();
+    } else if (linha.startsWith('@status ')) {
+      const [estado, detalhe = ''] = linha.slice(8).split(' | ');
+      info.status = estado.trim();
+      info.detalheStatus = detalhe.trim();
+    } else if (linha.startsWith('@idioma ')) {
+      info.idioma = linha.slice(8).trim();
+    } else if (linha.startsWith('@pontuacao ')) {
+      const [media, limiar, letras] = linha.slice(11).split(' | ').map(Number);
+      info.pontuacao = { media, limiar, letras };
+    } else if (linha.startsWith('@evidencia ')) {
+      info.evidencias.push(linha.slice(11));
+    } else if (linha.startsWith('@passo ')) {
+      const [numero, acao, ic, media, idioma, veredito] = linha.slice(7).split(' | ');
+      info.passos.push({ numero, acao, ic, media, idioma, veredito });
+    } else if (linha.startsWith('@decomposicao ')) {
+      info.decomposicao = linha.slice(14);
+    } else if (linha.startsWith('@nota ')) {
+      info.nota = linha.slice(6);
     } else if (linha.startsWith('@valor ')) {
       const [nome, decimal, hexa, binario] = linha.slice(7).split(' | ');
       info.valores.push({ nome, decimal, hexa, binario });
@@ -372,7 +393,36 @@ function montarResposta(claro, etapas) {
   ].join('\n');
 }
 
+function preencherEvidencias(lista, evidencias) {
+  lista.replaceChildren();
+  evidencias.forEach((texto) => {
+    const item = document.createElement('li');
+    item.textContent = texto;
+    lista.appendChild(item);
+  });
+}
+
+// Nenhuma sequência de cifras produziu texto natural: não mostra nenhum texto como se fosse o resultado.
+function exibirInconclusivo(info, meta, resposta) {
+  estadoResultado.claro = '';
+  estadoResultado.resposta = '';
+  $('resultado-vazio').hidden = true;
+  $('resultado-conteudo').hidden = true;
+  $('resultado-inconclusivo').hidden = false;
+  $('inconclusivo-titulo').textContent = `${meta.titulo}: resultado inconclusivo (${resposta.ms} ms)`;
+  $('inconclusivo-motivo').textContent = info.detalheStatus;
+  preencherEvidencias($('inconclusivo-evidencias'), info.evidencias);
+  const p = info.pontuacao;
+  $('inconclusivo-pontuacao').textContent = p
+    ? `Melhor média de trigramas encontrada: ${p.media.toFixed(2)}; para aceitar um texto de ${p.letras} letras seria preciso pelo menos ${p.limiar.toFixed(2)}.`
+    : '';
+  const tentativa = info.opcoes.find((opcao) => opcao.descricao.startsWith('melhor tentativa'));
+  $('inconclusivo-tentativa').hidden = !tentativa;
+  $('inconclusivo-texto').textContent = tentativa ? tentativa.previa : '';
+}
+
 function mostrarMensagemVazia(texto, tipo) {
+  $('resultado-inconclusivo').hidden = true;
   $('resultado-vazio').hidden = false;
   $('resultado-vazio').textContent = texto;
   $('resultado-vazio').className = tipo === 'erro' ? 'status erro' : 'discreto';
@@ -386,6 +436,10 @@ function exibirResultado(resposta, meta) {
   }
 
   const info = interpretarMensagem(resposta.mensagem);
+  if (info.status === 'inconclusivo') {
+    exibirInconclusivo(info, meta, resposta);
+    return;
+  }
   const claro = resposta.saida.replace(/\n$/, '');
   let etapas = info.etapas;
   if (etapas.length === 0 && meta.algoritmo && meta.algoritmo !== 'auto') {
@@ -398,6 +452,7 @@ function exibirResultado(resposta, meta) {
   estadoResultado.resposta = montarResposta(claro, etapas);
 
   $('resultado-vazio').hidden = true;
+  $('resultado-inconclusivo').hidden = true;
   $('resultado-conteudo').hidden = false;
   $('resultado-titulo').textContent = meta.titulo;
   $('ideal-texto').textContent = etapas.length ? etapas.map((e) => e.cifra).join(' → ') : info.cifras || 'nenhuma cifra';
@@ -415,6 +470,22 @@ function exibirResultado(resposta, meta) {
     verificacao.textContent = '';
     verificacao.className = 'verificacao';
   }
+
+  const confianca = $('confianca');
+  if (info.status === 'conclusivo') {
+    const p = info.pontuacao;
+    confianca.textContent = `Conclusivo · ${info.detalheStatus}${info.idioma ? ` · idioma: ${info.idioma}` : ''}` +
+      (p ? ` · média de trigramas ${p.media.toFixed(2)} (limiar ${p.limiar.toFixed(2)} para ${p.letras} letras)` : '');
+  } else {
+    confianca.textContent = '';
+  }
+  $('decomposicao').hidden = info.decomposicao === '';
+  $('decomposicao').textContent = info.decomposicao ? `Decomposição compatível em duas camadas: ${info.decomposicao}` : '';
+  $('nota-camadas').hidden = info.nota === '';
+  $('nota-camadas').textContent = info.nota;
+  $('tabela-passos').hidden = info.passos.length === 0;
+  preencherTabela($('corpo-passos'), info.passos.map((p) => [p.numero, p.acao, p.ic, p.media, p.idioma, p.veredito]));
+  preencherEvidencias($('lista-evidencias'), info.evidencias);
 
   $('tabela-etapas').hidden = etapas.length === 0;
   preencherTabela($('corpo-etapas'), etapas.map((e, i) => [String(i + 1), e.cifra, e.chave]));
@@ -471,7 +542,14 @@ document.querySelectorAll('#manual [data-algoritmo]').forEach((botao) => {
       return;
     }
     const inicio = performance.now();
-    const resposta = await window.cripto.executar({ algoritmo, modo: 'decifrar', chave, texto });
+    const resposta = await window.cripto.executar({
+      algoritmo,
+      modo: 'decifrar',
+      chave,
+      texto,
+      maxCamadas: Number($('manual-camadas').value) || undefined,
+      maxPeriodo: Number($('manual-periodo').value) || undefined,
+    });
     resposta.ms = Math.round(performance.now() - inicio);
     exibirResultado(resposta, { titulo: `Texto colado · ${NOMES[algoritmo]}`, algoritmo, chave });
   });
