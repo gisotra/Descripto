@@ -55,6 +55,25 @@ test.describe('XOR (arquivo UTF-8 do regulamento) sozinho e combinado', () => {
     assert.equal(r.verificado, true);
   });
 
+  test('quebra de linha final cifrada junto com o texto não faz a prova real falhar ("não confere")', () => {
+    const aleatorio = gerador(53);
+    for (const chave of [[221], bytes(aleatorio, 2), bytes(aleatorio, 3)]) {
+      const claro = TEXTOS[1];
+      const r = automatico(xor(`${claro}\n`, chave));
+      assert.equal(r.status, 'conclusivo', chave.join(','));
+      assert.equal(r.saida, claro, chave.join(','));
+      assert.equal(r.verificado, true, `${chave.join(',')}: a prova real tem de conferir`);
+      assert.deepEqual(r.etapas, [{ cifra: 'XOR', chave: chave.join(', ') }]);
+    }
+  });
+
+  test('quebra de linha CRLF crua no fim do arquivo é aceita', () => {
+    const claro = TEXTOS[0];
+    const r = automatico(`${xor(claro, [200, 17, 51])}\r\n`);
+    assert.equal(r.saida, claro);
+    assert.equal(r.verificado, true);
+  });
+
   test('texto que não é letra nem XOR de letras gera erro claro, não resultado', () => {
     const r = automatico('Olá, isto não é um texto cifrado!');
     assert.notEqual(r.status, 'conclusivo');

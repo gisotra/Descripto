@@ -185,6 +185,9 @@ camadas, período e tempo, e a compatibilidade com XOR e com os botões individu
 - Só são analisadas Atbash, César e Vigenère (e o XOR, por último); outras cifras clássicas ficam inconclusivas.
 - Se o último byte **cifrado** do XOR for `0x0A` (quebra de linha), o regulamento manda ignorá-lo
   e a última letra se perde; a tela avisa qual seria a letra.
+- A quebra de linha do fim do arquivo é aceita em qualquer forma: ausente, `\n`, `\r\n` crua, ou a própria quebra do texto
+  cifrada junto com o XOR (arquivo com o dobro de bytes). Nos quatro casos a prova real ("Conferido") é feita.
+  Um `\r\n` em que os **dois** bytes foram cifrados não é suportado.
 - O Vigenère e as combinações só são descobertos quando o texto (antes do XOR) tem apenas letras a-z.
 
 ## Observação sobre o `--no-sandbox`

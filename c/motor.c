@@ -1210,6 +1210,12 @@ static long preparar_codigos(unsigned char *entrada, size_t n, unsigned char *co
         memcpy(cod, entrada, n);
         qtd = (long) n;
     }
+    /* Editores do Windows terminam o arquivo com \r\n. O regulamento ignora a quebra de linha final, entao
+       \r\n no fim vale como uma quebra so. */
+    if (qtd >= 2 && cod[qtd - 2] == '\r' && cod[qtd - 1] == '\n') {
+        cod[qtd - 2] = '\n';
+        qtd--;
+    }
     return qtd;
 }
 
@@ -1927,7 +1933,11 @@ static int conferir_forma(const Efetivo *ef, int atbash_primeiro, const Hipotese
         for (size_t i = 0; i < h->n; i++) {
             conferir[i] ^= xr->chave[i % xr->tam];
         }
-        igual = (qtd_cod == (long) h->n || (qtd_cod == (long) h->n + 1 && cod[qtd_cod - 1] == '\n'))
+        /* Uma quebra de linha no fim e ignorada (regulamento), tanto se ela esta no arquivo sem cifrar quanto se foi
+           cifrada junto com o texto (o byte do fim decifra para \n): em qualquer caso sobra 1 codigo alem do texto. */
+        igual = (qtd_cod == (long) h->n
+                 || (qtd_cod == (long) h->n + 1 && final_ignoravel(cod, (size_t) qtd_cod, (size_t) qtd_cod - 1,
+                                                                     cod[qtd_cod - 1] ^ xr->chave[(size_t) (qtd_cod - 1) % xr->tam])))
                 && memcmp(conferir, cod, h->n) == 0;
     } else {
         igual = n == h->n && memcmp(conferir, entrada, h->n) == 0;
