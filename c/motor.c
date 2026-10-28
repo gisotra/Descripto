@@ -1752,13 +1752,75 @@ static int efetivo_sem_chave(const Efetivo *ef) {
     return 1;
 }
 
-/* Cifra o texto claro com a camada efetiva (ordem de cifragem). O buffer tem de ter n bytes. */
-static void cifrar_efetivo(const Efetivo *ef, const unsigned char *claro, size_t n, unsigned char *saida) {
-    memcpy(saida, claro, n);
-    if (!efetivo_sem_chave(ef)) {
-        vigenere_cifrar_buffer(saida, n, ef->k, ef->periodo, saida);
+/*
+ * Com Atbash e uma chave existem DUAS formas que produzem o MESMO texto cifrado:
+ *   - "Vigenere(k) e depois Atbash"  (a forma de Efetivo: Atbash por ultimo);
+ *   - "Atbash e depois Vigenere(-k)" (Atbash primeiro; a chave troca de sinal: abc vira azy).
+ * Qual delas foi usada nao esta no texto cifrado. Estas funcoes tratam as duas.
+ */
+static void chave_atbash_primeiro(const Efetivo *ef, int *saida) {
+    for (int j = 0; j < ef->periodo; j++) {
+        saida[j] = (26 - ef->k[j]) % 26;
     }
-    if (ef->reflexo) {
+}
+
+static int soma_chave(const int *k, int tam) {
+    int soma = 0;
+
+    for (int j = 0; j < tam; j++) {
+        soma += k[j];
+    }
+    return soma;
+}
+
+/*
+ * Forma principal quando ha Atbash e chave (1 = Atbash primeiro). Criterio, sem pretender adivinhar o que o autor
+ * fez: (1) chave de 4+ letras: a que mais parece uma senha/palavra pelos trigramas, se a diferenca for de pelo
+ * menos 1 nat por letra; (2) senao, a de letras mais perto de "a" (abc em vez de azy). A outra forma e sempre
+ * mostrada tambem.
+ */
+static int preferir_atbash_primeiro(const Efetivo *ef) {
+    int negada[MAX_EFETIVO];
+
+    if (!ef->reflexo || efetivo_sem_chave(ef)) {
+        return 0;
+    }
+    chave_atbash_primeiro(ef, negada);
+    if (ef->periodo >= 4 && ef->periodo <= MAX_PERIODO) {
+        unsigned char a[MAX_PERIODO], b[MAX_PERIODO];
+        double media_a, media_b;
+
+        for (int j = 0; j < ef->periodo; j++) {
+            a[j] = (unsigned char) ('a' + ef->k[j]);
+            b[j] = (unsigned char) ('a' + negada[j]);
+        }
+        media_a = media_trigramas(a, (size_t) ef->periodo, NULL);
+        media_b = media_trigramas(b, (size_t) ef->periodo, NULL);
+        if (fabs(media_a - media_b) >= 1.0) {
+            return media_b > media_a;
+        }
+    }
+    return soma_chave(negada, ef->periodo) < soma_chave(ef->k, ef->periodo);
+}
+
+/* Cifra o texto claro com a camada efetiva, na forma pedida (ordem de cifragem). O buffer tem de ter n bytes. */
+static void cifrar_efetivo(const Efetivo *ef, int atbash_primeiro, const unsigned char *claro, size_t n,
+                           unsigned char *saida) {
+    int negada[MAX_EFETIVO];
+    const int *chave = ef->k;
+
+    memcpy(saida, claro, n);
+    if (atbash_primeiro && ef->reflexo) {
+        chave_atbash_primeiro(ef, negada);
+        chave = negada;
+        for (size_t i = 0; i < n; i++) {
+            saida[i] = (unsigned char) ('z' - (saida[i] - 'a'));
+        }
+    }
+    if (!efetivo_sem_chave(ef)) {
+        vigenere_cifrar_buffer(saida, n, chave, ef->periodo, saida);
+    }
+    if (ef->reflexo && !atbash_primeiro) {
         for (size_t i = 0; i < n; i++) {
             saida[i] = (unsigned char) ('z' - (saida[i] - 'a'));
         }
@@ -1823,24 +1885,55 @@ typedef struct {
 } Etapa;
 
 /* Etapas na ordem de CIFRAGEM e a camada efetiva em palavras. Retorna quantas etapas. */
-static int listar_etapas(const Efetivo *ef, Etapa *etapas) {
-    int q = 0;
+static int listar_etapas(const Efetivo *ef, int atbash_primeiro, Etapa *etapas) {
+    int q = 0, negada[MAX_EFETIVO];
+    const int *chave = ef->k;
 
+    if (atbash_primeiro && ef->reflexo) {
+        chave_atbash_primeiro(ef, negada);
+        chave = negada;
+        snprintf(etapas[q].nome, sizeof etapas[q].nome, "Atbash");
+        snprintf(etapas[q].chave, sizeof etapas[q].chave, "sem chave");
+        q++;
+    }
     if (!efetivo_sem_chave(ef)) {
         snprintf(etapas[q].nome, sizeof etapas[q].nome, "%s", nome_deslocamento(ef->periodo));
         if (ef->periodo == 1) {
-            snprintf(etapas[q].chave, sizeof etapas[q].chave, "%d", ef->k[0]);
+            snprintf(etapas[q].chave, sizeof etapas[q].chave, "%d", chave[0]);
         } else {
-            chave_para_letras(ef->k, ef->periodo, etapas[q].chave, sizeof etapas[q].chave);
+            chave_para_letras(chave, ef->periodo, etapas[q].chave, sizeof etapas[q].chave);
         }
         q++;
     }
-    if (ef->reflexo) {
+    if (ef->reflexo && !atbash_primeiro) {
         snprintf(etapas[q].nome, sizeof etapas[q].nome, "Atbash");
         snprintf(etapas[q].chave, sizeof etapas[q].chave, "sem chave");
         q++;
     }
     return q;
+}
+
+/* Prova real de uma forma: cifra o texto claro com ela (e o XOR, se houver) e compara com o arquivo recebido. */
+static int conferir_forma(const Efetivo *ef, int atbash_primeiro, const Hipotese *h, int com_xor, const XorBusca *xr,
+                          const unsigned char *cod, long qtd_cod, const unsigned char *entrada, size_t n) {
+    unsigned char *conferir = malloc(h->n > 0 ? h->n : 1);
+    int igual;
+
+    if (conferir == NULL) {
+        return 0;
+    }
+    cifrar_efetivo(ef, atbash_primeiro, h->texto, h->n, conferir);
+    if (com_xor) {
+        for (size_t i = 0; i < h->n; i++) {
+            conferir[i] ^= xr->chave[i % xr->tam];
+        }
+        igual = (qtd_cod == (long) h->n || (qtd_cod == (long) h->n + 1 && cod[qtd_cod - 1] == '\n'))
+                && memcmp(conferir, cod, h->n) == 0;
+    } else {
+        igual = n == h->n && memcmp(conferir, entrada, h->n) == 0;
+    }
+    free(conferir);
+    return igual;
 }
 
 /* Maior pontuacao entre as chaves XOR candidatas: conclusivo antes de inconclusivo, depois a media. */
@@ -2005,32 +2098,33 @@ static int executar_automatico(unsigned char *entrada, size_t n_bruto, Opcoes *o
         const Hipotese *h = &melhor.escolhida;
         Efetivo ef;
         Etapa etapas[3];
-        int qtd_etapas, cesar = 0, k_vig[MAX_EFETIVO], decomposto;
-        unsigned char *conferir = malloc(h->n > 0 ? h->n : 1);
+        Etapa etapas_alt[3];
+        int qtd_etapas, qtd_alt_etapas = 0, cesar = 0, k_vig[MAX_EFETIVO], decomposto, primeiro, tem_forma_alt;
         char texto_cifras[160] = "", texto_chaves[256] = "", letras[96];
-        int verificado = 0;
+        int verificado = 0, verificado_alt = 0;
+        int chave_forma[MAX_EFETIVO];
 
-        if (conferir == NULL || !calcular_efetivo(h->camadas, h->qtd, &ef)) {
+        if (!calcular_efetivo(h->camadas, h->qtd, &ef)) {
             fprintf(stderr, "Erro: não foi possível resumir as camadas encontradas.\n");
-            free(conferir);
             liberar_resultado(&melhor);
             goto fim;
         }
         decomposto = ef.periodo <= MAX_PERIODO && decompor(&ef, &cesar, k_vig);
-        qtd_etapas = listar_etapas(&ef, etapas);
-
-        /* prova real: cifrar o texto claro com a camada efetiva (+ XOR) e comparar com o arquivo */
-        cifrar_efetivo(&ef, h->texto, h->n, conferir);
-        if (com_xor) {
-            for (size_t i = 0; i < h->n; i++) {
-                conferir[i] ^= xr.chave[i % xr.tam];
-            }
-            verificado = (qtd_cod == (long) h->n || (qtd_cod == (long) h->n + 1 && cod[qtd_cod - 1] == '\n'))
-                         && memcmp(conferir, cod, h->n) == 0;
+        primeiro = preferir_atbash_primeiro(&ef);
+        tem_forma_alt = ef.reflexo && !efetivo_sem_chave(&ef);
+        qtd_etapas = listar_etapas(&ef, primeiro, etapas);
+        if (primeiro) {
+            chave_atbash_primeiro(&ef, chave_forma);
         } else {
-            verificado = n == h->n && memcmp(conferir, entrada, h->n) == 0;
+            memcpy(chave_forma, ef.k, sizeof(int) * (size_t) ef.periodo);
         }
-        free(conferir);
+
+        /* prova real, de cada forma: cifrar o texto claro com ela (+ XOR) e comparar com o arquivo */
+        verificado = conferir_forma(&ef, primeiro, h, com_xor, &xr, cod, qtd_cod, entrada, n);
+        if (tem_forma_alt) {
+            qtd_alt_etapas = listar_etapas(&ef, !primeiro, etapas_alt);
+            verificado_alt = conferir_forma(&ef, !primeiro, h, com_xor, &xr, cod, qtd_cod, entrada, n);
+        }
 
         for (int e = 0; e < qtd_etapas; e++) {
             size_t usado = strlen(texto_cifras), usado_chaves = strlen(texto_chaves);
@@ -2067,6 +2161,15 @@ static int executar_automatico(unsigned char *entrada, size_t n_bruto, Opcoes *o
             fprintf(stderr, "@etapa XOR | %s\n", chave_xor);
         }
         fprintf(stderr, "@verificado %s\n", verificado ? "sim" : "nao");
+        if (tem_forma_alt) {                  /* a outra forma, que reproduz o mesmo texto cifrado */
+            for (int e = 0; e < qtd_alt_etapas; e++) {
+                fprintf(stderr, "@etapaeq %s | %s\n", etapas_alt[e].nome, etapas_alt[e].chave);
+            }
+            if (com_xor) {
+                fprintf(stderr, "@etapaeq XOR | %s\n", chave_xor);
+            }
+            fprintf(stderr, "@verificadoeq %s\n", verificado_alt ? "sim" : "nao");
+        }
 
         /* ---- passos da descriptografia, na ordem inversa da cifragem, com avaliacao de cada resultado ---- */
         emitir_passo(0, com_xor ? "texto depois de desfazer o XOR" : "texto cifrado (entrada)", base, nb);
@@ -2084,15 +2187,19 @@ static int executar_automatico(unsigned char *entrada, size_t n_bruto, Opcoes *o
                     plano[1].tam = 1;
                     plano[1].desl[0] = cesar;
                     qtd_plano = 2;
-                } else {                  /* ordem inversa da cifragem: Atbash (se houver) e depois o deslocamento */
-                    if (ef.reflexo) {
+                } else {                  /* ordem inversa da cifragem, na forma principal */
+                    if (ef.reflexo && !primeiro) {          /* cifrou V e depois Atbash: desfaz Atbash primeiro */
                         plano[qtd_plano].reflexo = 1;
                         plano[qtd_plano++].tam = 1;
                     }
                     if (!efetivo_sem_chave(&ef)) {
                         plano[qtd_plano].tam = ef.periodo;
-                        memcpy(plano[qtd_plano].desl, ef.k, sizeof(int) * (size_t) ef.periodo);
+                        memcpy(plano[qtd_plano].desl, chave_forma, sizeof(int) * (size_t) ef.periodo);
                         qtd_plano++;
+                    }
+                    if (ef.reflexo && primeiro) {           /* cifrou Atbash e depois V: desfaz V primeiro */
+                        plano[qtd_plano].reflexo = 1;
+                        plano[qtd_plano++].tam = 1;
                     }
                 }
                 for (int p = 0; p < qtd_plano; p++) {
@@ -2125,13 +2232,26 @@ static int executar_automatico(unsigned char *entrada, size_t n_bruto, Opcoes *o
                             "deslocamentos, então o texto cifrado é idêntico se a ordem for invertida ou se o deslocamento "
                             "for dividido de outro jeito (há 26 divisões equivalentes). O que o texto cifrado prova é a camada "
                             "efetiva: Vigenère com a chave %s.\n", etapas[0].chave);
-        } else if (qtd_etapas > 1 && !com_xor) {
-            fprintf(stderr, "@nota Atbash e deslocamentos são equivalentes em qualquer ordem (com a chave ajustada): a ordem "
-                            "da cifragem não pode ser determinada, só a camada efetiva.\n");
+        } else if (tem_forma_alt) {
+            char chave_a[96], chave_b[96];
+            int negada[MAX_EFETIVO];
+
+            chave_para_letras(ef.k, ef.periodo, chave_a, sizeof chave_a);
+            chave_atbash_primeiro(&ef, negada);
+            chave_para_letras(negada, ef.periodo, chave_b, sizeof chave_b);
+            if (ef.periodo == 1) {
+                snprintf(chave_a, sizeof chave_a, "%d", ef.k[0]);
+                snprintf(chave_b, sizeof chave_b, "%d", negada[0]);
+            }
+            fprintf(stderr, "@nota O texto cifrado não diz de que lado o Atbash foi aplicado: \"%s(%s) e depois Atbash\" e "
+                            "\"Atbash e depois %s(%s)\" produzem exatamente o mesmo texto cifrado (a chave troca de sinal: "
+                            "cada letra vira 26 menos o valor dela). As duas formas foram conferidas e estão listadas; a "
+                            "principal é a de chave mais parecida com uma senha ou, na dúvida, com letras mais perto de \"a\".\n",
+                    nome_deslocamento(ef.periodo), chave_a, nome_deslocamento(ef.periodo), chave_b);
         }
 
         if (ef.periodo >= 1 && !efetivo_sem_chave(&ef)) {
-            emitir_valores_letras(nome_deslocamento(ef.periodo), ef.k, ef.periodo);
+            emitir_valores_letras(nome_deslocamento(ef.periodo), chave_forma, ef.periodo);
         }
         if (com_xor) {
             emitir_valores_xor(xr.chave, xr.tam);
@@ -2149,7 +2269,7 @@ static int executar_automatico(unsigned char *entrada, size_t n_bruto, Opcoes *o
             }
             {
                 Etapa e_alt[3];
-                int q_alt = listar_etapas(&ef_alt, e_alt);
+                int q_alt = listar_etapas(&ef_alt, 0, e_alt);
                 char *p = descricao;
 
                 p += snprintf(descricao, sizeof descricao, "hipótese descartada");

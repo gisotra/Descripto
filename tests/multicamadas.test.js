@@ -21,6 +21,10 @@ function recuperar(cifrado, esperado, opcoes = []) {
   assert.ok(r.media >= r.limiar, 'conclusivo exige média acima do limiar');
   // verificação independente: as cifras e chaves REPORTADAS, aplicadas ao texto claro, têm de dar o texto cifrado
   assert.equal(aplicarEtapas(esperado, r.etapas), cifrado, `as etapas reportadas (${JSON.stringify(r.etapas)}) não reproduzem o texto cifrado`);
+  if (r.equivalente) {   // a forma equivalente (Atbash do outro lado) também tem de reproduzir o texto cifrado
+    assert.equal(r.verificadoEq, true, 'a forma equivalente falhou na prova real do motor');
+    assert.equal(aplicarEtapas(esperado, r.equivalente), cifrado, `a forma equivalente (${JSON.stringify(r.equivalente)}) não reproduz o texto cifrado`);
+  }
   return r;
 }
 
@@ -144,9 +148,46 @@ test.describe('duas cifras em sequência', () => {
       recuperar(atbash(cesar(claro, deslocamento)), claro);
       const r = recuperar(vigenere(atbash(claro), chave), claro);
       recuperar(atbash(vigenere(claro, chave)), claro);
-      // a camada efetiva sempre sai na forma "deslocamento e depois Atbash"
-      assert.equal(r.etapas[r.etapas.length - 1].cifra, 'Atbash');
-      assert.match(r.nota, /ordem da cifragem não pode ser determinada/);
+      // com Atbash e chave há duas formas equivalentes, as duas conferidas
+      assert.ok(r.equivalente, 'deve mostrar a forma equivalente');
+      assert.equal(r.verificadoEq, true);
+      assert.notDeepEqual(r.equivalente, r.etapas);
+      assert.match(r.nota, /não diz de que lado o Atbash foi aplicado/);
+    }
+  });
+
+  test('Atbash e Vigenère("abc"): a chave "azy" é a mesma cifra com o Atbash do outro lado (caso relatado)', () => {
+    const negada = (chave) => [...chave].map((c) => String.fromCharCode(97 + ((26 - (c.charCodeAt(0) - 97)) % 26))).join('');
+    assert.equal(negada('abc'), 'azy');
+    for (const claro of [PORTUGUES[0], PORTUGUES[4], INGLES[1]]) {
+      const atbashDepoisVigenere = vigenere(atbash(claro), 'abc');
+      const vigenereDepoisAtbash = atbash(vigenere(claro, 'azy'));
+      assert.equal(atbashDepoisVigenere, vigenereDepoisAtbash, 'as duas formas dão o mesmo texto cifrado');
+
+      const r = recuperar(atbashDepoisVigenere, claro);
+      // forma principal: a que o autor usou (chave "abc", letras mais perto de "a")
+      assert.deepEqual(r.etapas, [{ cifra: 'Atbash', chave: 'sem chave' }, { cifra: 'Vigenère', chave: 'abc' }]);
+      // forma equivalente: Vigenère com a chave negada e depois Atbash
+      assert.deepEqual(r.equivalente, [{ cifra: 'Vigenère', chave: 'azy' }, { cifra: 'Atbash', chave: 'sem chave' }]);
+      assert.match(r.nota, /"Vigenère\(azy\) e depois Atbash" e "Atbash e depois Vigenère\(abc\)"/);
+      // os passos seguem a forma principal: desfaz o Vigenère (camada externa) e depois o Atbash
+      assert.match(r.passos[1].acao, /desfazer Vigenère \(chave abc\)/);
+      assert.match(r.passos[2].acao, /desfazer Atbash/);
+      assert.equal(r.passos[1].natural, false);
+      assert.equal(r.passos[2].natural, true);
+    }
+  });
+
+  test('com chaves que são palavras, a forma principal é a que usa a palavra, seja qual for a ordem usada', () => {
+    const negada = (chave) => [...chave].map((c) => String.fromCharCode(97 + ((26 - (c.charCodeAt(0) - 97)) % 26))).join('');
+    for (const palavra of ['segredo', 'chave', 'torneio', 'senha', 'cifra']) {
+      const claro = PORTUGUES[2];
+      const a = recuperar(vigenere(atbash(claro), palavra), claro);          // Atbash e depois a palavra
+      const b = recuperar(atbash(vigenere(claro, palavra)), claro);          // a palavra e depois Atbash
+      assert.deepEqual(a.etapas, [{ cifra: 'Atbash', chave: 'sem chave' }, { cifra: 'Vigenère', chave: palavra }], palavra);
+      assert.deepEqual(b.etapas, [{ cifra: 'Vigenère', chave: palavra }, { cifra: 'Atbash', chave: 'sem chave' }], palavra);
+      assert.equal(a.equivalente[0].chave, negada(palavra));
+      assert.equal(b.equivalente[1].cifra, 'Vigenère');
     }
   });
 

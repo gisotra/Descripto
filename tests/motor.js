@@ -21,6 +21,8 @@ function executar(args, entrada = '') {
     etapas: [],          // [{ cifra, chave }] na ordem de cifragem
     passos: [],          // evolução da descriptografia, com a avaliação de cada texto intermediário
     verificado: null,
+    equivalente: null,   // outra forma, com o Atbash do outro lado, que reproduz o mesmo texto cifrado
+    verificadoEq: null,
     idioma: '',
     decomposicao: '',
     nota: '',
@@ -40,6 +42,11 @@ function executar(args, entrada = '') {
     } else if (linha.startsWith('@etapa ')) {
       const [cifra, chave] = linha.slice(7).split(' | ');
       info.etapas.push({ cifra, chave });
+    } else if (linha.startsWith('@etapaeq ')) {
+      const [cifra, chave] = linha.slice(9).split(' | ');
+      (info.equivalente = info.equivalente || []).push({ cifra, chave });
+    } else if (linha.startsWith('@verificadoeq ')) {
+      info.verificadoEq = linha.slice(14).trim() === 'sim';
     } else if (linha.startsWith('@passo ')) {
       const [numero, acao, ic, media, idioma, veredito] = linha.slice(7).split(' | ');
       info.passos.push({ numero: Number(numero), acao, ic: Number(ic), media: Number(media), idioma, natural: veredito.startsWith('texto natural') });

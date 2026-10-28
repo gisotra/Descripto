@@ -323,6 +323,7 @@ function interpretarMensagem(mensagem) {
   const info = {
     cifras: '', chave: '', etapas: [], valores: [], opcoes: [], avisos: [], verificado: '',
     status: '', detalheStatus: '', idioma: '', pontuacao: null, evidencias: [], passos: [], decomposicao: '', nota: '',
+    equivalente: [], verificadoEq: '',
   };
 
   (mensagem || '').split('\n').forEach((linha) => {
@@ -335,6 +336,11 @@ function interpretarMensagem(mensagem) {
       info.etapas.push({ cifra, chave });
     } else if (linha.startsWith('@verificado ')) {
       info.verificado = linha.slice(12).trim();
+    } else if (linha.startsWith('@etapaeq ')) {
+      const [cifra, chave] = linha.slice(9).split(' | ');
+      info.equivalente.push({ cifra, chave });
+    } else if (linha.startsWith('@verificadoeq ')) {
+      info.verificadoEq = linha.slice(14).trim();
     } else if (linha.startsWith('@status ')) {
       const [estado, detalhe = ''] = linha.slice(8).split(' | ');
       info.status = estado.trim();
@@ -382,15 +388,19 @@ function preencherTabela(corpo, linhas) {
 }
 
 // Formato pedido pelo regulamento: texto claro, cifras na ordem de aplicação e chaves.
-function montarResposta(claro, etapas) {
+function montarResposta(claro, etapas, equivalente = []) {
   if (etapas.length === 0) {
     return `Texto claro: ${claro}\nCifras: nenhuma (o texto já está em claro)`;
   }
-  return [
+  const linhas = [
     `Texto claro: ${claro}`,
     `Cifras, na ordem em que foram aplicadas: ${etapas.map((e, i) => `${i + 1}) ${e.cifra}`).join('  ')}`,
     `Chaves: ${etapas.map((e, i) => `${i + 1}) ${e.cifra}: ${e.chave}`).join('  ')}`,
-  ].join('\n');
+  ];
+  if (equivalente.length) {   // com Atbash, a outra forma (Atbash do outro lado, chave negada) dá o mesmo texto cifrado
+    linhas.push(`Forma equivalente, que também reproduz o texto cifrado: ${equivalente.map((e, i) => `${i + 1}) ${e.cifra}: ${e.chave}`).join('  ')}`);
+  }
+  return linhas.join('\n');
 }
 
 function preencherEvidencias(lista, evidencias) {
@@ -449,7 +459,7 @@ function exibirResultado(resposta, meta) {
   }
 
   estadoResultado.claro = claro;
-  estadoResultado.resposta = montarResposta(claro, etapas);
+  estadoResultado.resposta = montarResposta(claro, etapas, info.equivalente);
 
   $('resultado-vazio').hidden = true;
   $('resultado-inconclusivo').hidden = true;
@@ -479,6 +489,12 @@ function exibirResultado(resposta, meta) {
   } else {
     confianca.textContent = '';
   }
+  const textoEquivalente = info.equivalente.map((e) => `${e.cifra} (${e.chave})`).join(' → ');
+  $('equivalente').hidden = info.equivalente.length === 0;
+  $('equivalente').textContent = info.equivalente.length
+    ? `Forma equivalente ${info.verificadoEq === 'sim' ? '(também conferida: reproduz o arquivo)' : '(NÃO conferiu)'}: ${textoEquivalente}. ` +
+      'O texto cifrado é o mesmo com o Atbash de qualquer lado; só a chave troca de sinal.'
+    : '';
   $('decomposicao').hidden = info.decomposicao === '';
   $('decomposicao').textContent = info.decomposicao ? `Decomposição compatível em duas camadas: ${info.decomposicao}` : '';
   $('nota-camadas').hidden = info.nota === '';

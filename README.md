@@ -94,6 +94,11 @@ programa mostra a **camada efetiva** (provada) e, quando há deslocamento em com
 compatível em duas camadas** (César interna e Vigenère externa, por convenção), claramente marcada como não
 identificável. O XOR, que não comuta com as outras, é identificado como a última camada.
 
+O mesmo vale para o **Atbash**: `Atbash → Vigenère("abc")` e `Vigenère("azy") → Atbash` dão exatamente o mesmo texto
+cifrado (a chave troca de sinal quando o Atbash muda de lado: cada letra vira 26 menos o valor dela). O programa
+mostra **as duas formas, cada uma conferida**, e escolhe a principal pela chave que mais parece uma senha (4 letras ou
+mais) ou, na dúvida, a de letras mais perto de "a". A resposta para o professor traz as duas.
+
 Opções do motor (`bin/motor auto decifrar`): `--max-camadas 1-4` (padrão 3), `--max-periodo 1-24` (padrão 8, o
 máximo do regulamento) e `--tempo-ms` (padrão 3000). No modo manual da tela os dois primeiros têm campos próprios.
 
