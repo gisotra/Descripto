@@ -30,7 +30,7 @@ function mostrarTela(nome) {
   });
   $('dicas').textContent = DICAS[nome];
   if (nome === 'descriptografar') {
-    $('lista').focus();
+    $('lista').focus({ preventScroll: true });
   } else if (nome === 'criptografar') {
     focarCriptografar();
   } else {
@@ -525,14 +525,23 @@ function exibirResultado(resposta, meta) {
   });
 }
 
+// Depois de carregar um arquivo (ou usar o modo manual), o resultado passa a ficar ACIMA da lista de arquivos
+// e a tela volta para o topo: a primeira coisa vista é a descriptografia. A lista continua logo abaixo.
+function resultadoParaOTopo() {
+  $('tela-descriptografar').classList.add('com-resultado');
+  window.scrollTo(0, 0);
+}
+
 async function analisarArquivo(item) {
   const minha = ++seqAnalise;
+  resultadoParaOTopo();
   mostrarMensagemVazia(`Analisando ${item.nome}…`);
   const resposta = await window.cripto.analisarArquivo(item.caminho);
   if (minha !== seqAnalise) {
     return;
   }
   exibirResultado(resposta, { titulo: `${item.nome} · ${resposta.tamanho ?? item.tamanho} bytes` });
+  resultadoParaOTopo();
 }
 
 function copiarResposta() {
@@ -568,6 +577,7 @@ document.querySelectorAll('#manual [data-algoritmo]').forEach((botao) => {
     });
     resposta.ms = Math.round(performance.now() - inicio);
     exibirResultado(resposta, { titulo: `Texto colado · ${NOMES[algoritmo]}`, algoritmo, chave });
+    resultadoParaOTopo();
   });
 });
 

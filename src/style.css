@@ -80,6 +80,16 @@ h2 {
   padding: 16px 20px 24px;
 }
 
+/* Depois de carregar um arquivo, o resultado vem antes da lista de arquivos. */
+#tela-descriptografar.com-resultado:not([hidden]) {
+  display: flex;
+  flex-direction: column;
+}
+
+#tela-descriptografar.com-resultado #painel-resultado {
+  order: -1;
+}
+
 .bloco {
   background: var(--cartao);
   border: 1px solid var(--borda);
