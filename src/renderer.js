@@ -323,7 +323,7 @@ function interpretarMensagem(mensagem) {
   const info = {
     cifras: '', chave: '', etapas: [], valores: [], opcoes: [], avisos: [], verificado: '',
     status: '', detalheStatus: '', idioma: '', pontuacao: null, evidencias: [], passos: [], decomposicao: '', nota: '',
-    equivalente: [], verificadoEq: '',
+    equivalente: [], verificadoEq: '', estrutura: '',
   };
 
   (mensagem || '').split('\n').forEach((linha) => {
@@ -359,6 +359,8 @@ function interpretarMensagem(mensagem) {
       info.decomposicao = linha.slice(14);
     } else if (linha.startsWith('@nota ')) {
       info.nota = linha.slice(6);
+    } else if (linha.startsWith('@estrutura ')) {
+      info.estrutura = linha.slice(11);
     } else if (linha.startsWith('@valor ')) {
       const [nome, decimal, hexa, binario] = linha.slice(7).split(' | ');
       info.valores.push({ nome, decimal, hexa, binario });
@@ -467,7 +469,16 @@ function exibirResultado(resposta, meta) {
   $('resultado-titulo').textContent = meta.titulo;
   $('ideal-texto').textContent = etapas.length ? etapas.map((e) => e.cifra).join(' → ') : info.cifras || 'nenhuma cifra';
   $('ideal-tempo').textContent = `(analisado em ${resposta.ms} ms)`;
-  $('dupla').hidden = etapas.length !== 2;
+  // César, Vigenère e Atbash em sequência se fundem (ver o README): a tabela mostra a forma mais simples que
+  // reproduz o arquivo, com até 3 etapas. O original pode ter usado mais cifras (ex.: César → Vigenère somam).
+  $('dupla').hidden = etapas.length < 2;
+  $('dupla').textContent = etapas.length >= 2
+    ? `Criptografia múltipla identificada: ${etapas.length} cifras em sequência na forma mais simples que reproduz o arquivo`
+    : '';
+  $('dupla').title = 'César e Vigenère somam deslocamentos e o Atbash pode trocar de lado: 3 ou 4 cifras de letras podem ' +
+    'equivaler a menos etapas. A tabela mostra uma forma conferida que reproduz exatamente o arquivo.';
+  $('aviso-estrutura').hidden = info.estrutura === '';
+  $('aviso-estrutura').textContent = info.estrutura ? `⚠ ${info.estrutura}` : '';
 
   const verificacao = $('verificacao');
   if (info.verificado === 'sim') {

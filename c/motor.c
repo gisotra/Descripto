@@ -48,9 +48,9 @@
 #define PREVIA 70                 /* caracteres mostrados em cada possibilidade */
 #define MAX_PERIODO 24            /* maior chave de Vigenere (em letras) que a busca aceita */
 #define MAX_CAMADAS 4             /* maior numero de cifras em sequencia que a busca aceita */
-#define PADRAO_MAX_CAMADAS 3
-#define PADRAO_MAX_PERIODO 8      /* o regulamento permite chaves de ate 8 letras */
-#define PADRAO_TEMPO_MS 3000
+#define PADRAO_MAX_CAMADAS 4
+#define PADRAO_MAX_PERIODO 24     /* cada Vigenere tem ate 8 letras, mas duas em sequencia somam uma chave de mmc letras */
+#define PADRAO_TEMPO_MS 4500      /* abaixo dos 5 s pedidos, com folga para um PC mais lento na segunda fase */
 #define LARGURA_FEIXE 3           /* hipoteses mantidas em cada nivel da busca em camadas */
 #define GANHO_MINIMO 0.10         /* quanto uma camada precisa melhorar o texto (nats por letra) */
 #define MIN_LETRAS 55             /* abaixo disso nenhuma conclusao e confiavel (ver limiar_natural) */
@@ -226,6 +226,78 @@ static double media_trigramas(const unsigned char *texto, size_t n, int *idioma)
     return melhor;
 }
 
+/* Media, por letra, do log da frequencia de cada letra no portugues (so a-z). */
+static double media_unigramas(const unsigned char *texto, size_t n) {
+    double total = 0;
+    size_t contados = 0;
+
+    for (size_t i = 0; i < n; i++) {
+        if (texto[i] >= 'a' && texto[i] <= 'z') {
+            total += log_frequencia[texto[i] - 'a'];
+            contados++;
+        }
+    }
+    return contados > 0 ? total / (double) contados : -100.0;
+}
+
+static int comparar_decrescente(const void *a, const void *b) {
+    double x = *(const double *) a, y = *(const double *) b;
+
+    return x < y ? 1 : x > y ? -1 : 0;
+}
+
+/*
+ * Media de trigramas da METADE MAIS NATURAL do texto: o texto e dividido em blocos de BLOCO_METADE letras e
+ * so a melhor metade dos blocos entra na media (vale o idioma que der mais). Um texto com muitos nomes
+ * proprios ou palavras de outra lingua (Mamardashvili, Kvaratskhelia) tem a media geral baixa, mas os
+ * trechos em portugues continuam muito naturais; texto decifrado com a chave errada e ruim em todos os blocos.
+ */
+#define BLOCO_METADE 20
+
+static double media_melhor_metade(const unsigned char *texto, size_t n) {
+    size_t cap = n / BLOCO_METADE + 1;
+    double *blocos = malloc(sizeof(double) * cap), melhor = -100.0;
+
+    if (blocos == NULL || n < 2 * BLOCO_METADE) {
+        free(blocos);
+        return media_trigramas(texto, n, NULL);
+    }
+    for (int idioma = 0; idioma < QTD_IDIOMAS; idioma++) {
+        const unsigned char *tabela = IDIOMAS[idioma].tabela;
+        size_t qtd = 0;
+        double soma = 0;
+
+        for (size_t inicio = 0; inicio < n; inicio += BLOCO_METADE) {
+            double total = 0;
+            size_t contados = 0;
+
+            for (size_t i = inicio < 2 ? 2 : inicio; i < inicio + BLOCO_METADE && i < n; i++) {
+                int a = texto[i - 2] - 'a', b = texto[i - 1] - 'a', c = texto[i] - 'a';
+
+                if (a >= 0 && a <= 25 && b >= 0 && b <= 25 && c >= 0 && c <= 25) {
+                    total -= tabela[a * 676 + b * 26 + c] / 16.0;
+                    contados++;
+                }
+            }
+            if (contados >= BLOCO_METADE / 2) {
+                blocos[qtd++] = total / (double) contados;
+            }
+        }
+        if (qtd == 0) {
+            continue;
+        }
+        qsort(blocos, qtd, sizeof(double), comparar_decrescente);
+        for (size_t i = 0; i < (qtd + 1) / 2; i++) {
+            soma += blocos[i];
+        }
+        if (soma / (double) ((qtd + 1) / 2) > melhor) {
+            melhor = soma / (double) ((qtd + 1) / 2);
+        }
+    }
+    free(blocos);
+    return melhor;
+}
+
 /* Indice de coincidencia: chance de duas letras sorteadas do texto serem iguais. */
 static double indice_coincidencia(const unsigned char *texto, size_t n) {
     size_t contagem[26] = {0}, total = 0;
@@ -288,8 +360,13 @@ static int estimar_periodo_ic(const unsigned char *texto, size_t n, int max_peri
             melhor = ics[tam];
         }
     }
+    /* Com colunas curtas o IC varia muito e o maximo pode cair num multiplo do periodo certo: vale o menor
+       periodo com pelo menos 60% do excesso de IC (sobre letras aleatorias) do melhor. Divisores do periodo certo
+       misturam alfabetos e ficam abaixo disso. Sem nenhum periodo claramente natural, o mais perto do maximo. */
+    double corte = melhor >= 0.055 ? IC_ALEATORIO + 0.6 * (melhor - IC_ALEATORIO) : melhor - 0.006;
+
     for (int tam = 1; tam <= limite; tam++) {
-        if (ics[tam] >= melhor - 0.006) {
+        if (ics[tam] >= corte) {
             if (ic_medio != NULL) {
                 *ic_medio = ics[tam];
             }
@@ -1367,6 +1444,50 @@ static double limiar_natural(size_t n) {
     return TABELA[q - 1].limiar;
 }
 
+/*
+ * Limiar para um texto decifrado com uma chave efetiva de "periodo" letras. Quanto mais letras na chave
+ * (e menos letras por coluna, n / periodo), mais a busca consegue "ajustar" ate texto sem sentido, entao mais
+ * natural o resultado precisa ser. Calibrado como limiar_natural (melhor media que a busca de cada periodo
+ * arranca de textos que nao devem ser aceitos, mais 0,3): ate 8 letras vale a tabela de limiar_natural.
+ */
+static double limiar_periodo(size_t n, int periodo) {
+    double base = limiar_natural(n);
+
+    if (limiar_forcado > -HUGE_VAL || periodo < 2 || n < MIN_LETRAS) {
+        return base;
+    }
+    double ajuste = -2.20 - 0.90 * log((double) n / (4.0 * periodo));
+
+    return ajuste > base ? ajuste : base;
+}
+
+/*
+ * Segundo criterio, "decidido pela estrutura da cifra" (confianca media). Serve para textos com muitos nomes
+ * proprios ou palavras estrangeiras, cuja media de trigramas fica abaixo do limiar mesmo com a chave certa.
+ * Um texto so passa se TODAS as condicoes valem:
+ *   - pelo menos MIN_LETRAS_ESTRUTURA letras e uma camada desfeita (ou o XOR, que ja exige que todo byte vire letra);
+ *   - pelo menos MIN_LETRAS_POR_LIVRE letras para cada letra de chave escolhida pela busca (com menos, a busca
+ *     consegue ajustar a chave ate a metade "boa" do texto: uma chave livre de 20 letras em 200 letras, por exemplo);
+ *   - IC do texto decifrado de lingua natural (as colunas da chave ficaram alinhadas entre si);
+ *   - frequencia das letras parecida com a do portugues/ingles e bem melhor que a do texto cifrado;
+ *   - a metade mais natural do texto (blocos de 20 letras) acima de limiar_metade.
+ * Calibrado com os mesmos textos que nao devem ser aceitos (letras aleatorias, substituicao, texto embaralhado,
+ * Vigenere de 31 e 37 letras, inclusive sobre texto embaralhado, substituicao seguida de Vigenere ou de XOR): cada
+ * minimo tem folga sobre o maior valor que a busca inteira (todas as chaves XOR e camadas) arrancou deles, e fica
+ * abaixo do que textos reais cheios de nomes proprios dao (IC >= 0,064, letras >= -3,27, metade >= -3,11).
+ */
+#define MIN_LETRAS_ESTRUTURA 150
+#define MIN_LETRAS_POR_LIVRE 25
+#define IC_ESTRUTURA 0.058
+#define UNIGRAMA_ESTRUTURA -3.32
+#define GANHO_UNIGRAMA_ESTRUTURA 0.25
+
+static double limiar_metade(size_t n, int periodo) {
+    double ajuste = -1.90 - log((double) n / (4.0 * (periodo > 1 ? periodo : 1)));
+
+    return ajuste > -3.20 ? ajuste : -3.20;
+}
+
 /* Um texto candidato com a sequencia de camadas que o produziu (na ordem em que foram DESFEITAS). */
 typedef struct {
     Camada camadas[MAX_CAMADAS];
@@ -1377,6 +1498,8 @@ typedef struct {
     double media;        /* trigramas, nats por letra, melhor idioma */
     double ic;
     int idioma;
+    int periodo;         /* letras da chave efetiva (mmc das camadas de deslocamento); 0 = nenhuma */
+    int livres;          /* letras de chave escolhidas pela busca (soma das camadas): o que pode ter sido ajuste */
 } Hipotese;
 
 static void hip_liberar(Hipotese *h) {
@@ -1390,8 +1513,27 @@ static void hip_avaliar(Hipotese *h) {
     h->ic = indice_coincidencia(h->texto, h->n);
 }
 
+static double hip_limiar(const Hipotese *h) {
+    return limiar_periodo(h->n, h->periodo);
+}
+
 static int hip_natural(const Hipotese *h) {
-    return h->n >= MIN_LETRAS && h->media >= limiar_natural(h->n);
+    return h->n >= MIN_LETRAS && h->media >= hip_limiar(h);
+}
+
+/* Criterio da estrutura da cifra (ver limiar_metade). unigrama_raiz: do texto antes de desfazer as camadas. */
+static int hip_provavel(const Hipotese *h, double unigrama_raiz, int com_xor) {
+    double unigrama;
+
+    if (h->n < MIN_LETRAS_ESTRUTURA || (h->qtd == 0 && !com_xor) || h->ic < IC_ESTRUTURA
+        || h->n < (size_t) MIN_LETRAS_POR_LIVRE * (size_t) h->livres) {
+        return 0;
+    }
+    unigrama = media_unigramas(h->texto, h->n);
+    if (unigrama < UNIGRAMA_ESTRUTURA || (h->qtd > 0 && unigrama - unigrama_raiz < GANHO_UNIGRAMA_ESTRUTURA)) {
+        return 0;
+    }
+    return media_melhor_metade(h->texto, h->n) >= limiar_metade(h->n, h->periodo);
 }
 
 static int hip_copiar(const Hipotese *origem, Hipotese *destino) {
@@ -1402,6 +1544,10 @@ static int hip_copiar(const Hipotese *origem, Hipotese *destino) {
     }
     memcpy(destino->texto, origem->texto, origem->n);
     return 1;
+}
+
+static int mdc(int a, int b) {
+    return b == 0 ? a : mdc(b, a % b);
 }
 
 /* Hipotese filha: desfaz mais uma camada do texto do pai. */
@@ -1415,6 +1561,14 @@ static int hip_derivar(const Hipotese *pai, const Camada *camada, Hipotese *filh
     memcpy(filho->camadas, pai->camadas, sizeof(Camada) * (size_t) pai->qtd);
     filho->camadas[pai->qtd] = *camada;
     filho->qtd = pai->qtd + 1;
+    filho->periodo = pai->periodo;
+    filho->livres = pai->livres + (camada->reflexo ? 0 : camada->tam);
+    if (!camada->reflexo) {
+        int p = pai->periodo > 0 ? pai->periodo : 1;
+        long mmc = (long) p / mdc(p, camada->tam) * camada->tam;
+
+        filho->periodo = mmc > 100000 ? 100000 : (int) mmc;
+    }
     hip_avaliar(filho);
     return 1;
 }
@@ -1428,7 +1582,162 @@ static uint64_t hash_texto(const unsigned char *texto, size_t n) {
     return h;
 }
 
-#define MAX_FILHOS 12
+/* Chave com estrutura: uma Vigenere de p1 letras (p2 = 1) ou a soma de duas, k[i] = a[i % p1] + b[i % p2] (duas
+   Vigenere em sequencia; o periodo e o mmc). Usada na busca e na simplificacao da chave (ver simplificar_chave). */
+typedef struct {
+    int p1, p2;                      /* p2 = 1: uma Vigenere de p1 letras */
+    int a[MAX_PERIODO], b[MAX_PERIODO];
+} Estrutura;
+
+static int estrutura_periodo(const Estrutura *e) {
+    return e->p1 / mdc(e->p1, e->p2) * e->p2;
+}
+
+static void estrutura_chave(const Estrutura *e, int *k) {
+    int periodo = estrutura_periodo(e);
+
+    for (int i = 0; i < periodo; i++) {
+        k[i] = (e->a[i % e->p1] + (e->p2 > 1 ? e->b[i % e->p2] : 0)) % 26;
+    }
+}
+
+/* Ajusta a estrutura a chave k (de "periodo" letras, multiplo do periodo da estrutura). Retorna quantas letras batem. */
+static int estrutura_ajustar(Estrutura *e, const int *k, int periodo) {
+    int ajustada[MAX_PERIODO], periodo_e = estrutura_periodo(e), concorda = 0;
+
+    memset(e->b, 0, sizeof e->b);
+    for (int rodada = 0; rodada < (e->p2 > 1 ? 4 : 1); rodada++) {
+        for (int lado = 0; lado < (e->p2 > 1 ? 2 : 1); lado++) {
+            int p = lado == 0 ? e->p1 : e->p2;
+
+            for (int r = 0; r < p; r++) {                 /* valor mais votado da letra r, descontado o outro lado */
+                int contagem[26] = {0}, melhor = -1;
+
+                for (int i = r; i < periodo; i += p) {
+                    int v = lado == 0 ? k[i] - (e->p2 > 1 ? e->b[i % e->p2] : 0) : k[i] - e->a[i % e->p1];
+
+                    v = (v % 26 + 26) % 26;
+                    contagem[v]++;
+                    if (melhor < 0 || contagem[v] > contagem[melhor]) {
+                        melhor = v;
+                    }
+                }
+                (lado == 0 ? e->a : e->b)[r] = melhor;
+            }
+        }
+    }
+    estrutura_chave(e, ajustada);
+    for (int i = 0; i < periodo; i++) {
+        concorda += k[i] == ajustada[i % periodo_e];
+    }
+    return concorda;
+}
+
+/*
+ * Ajuste da estrutura pela FREQUENCIA DAS LETRAS (sem partir de outra chave). Com b fixo, cada letra de a tem
+ * solucao exata (a melhor das 26 para as colunas em que ela entra), e vice-versa; alternando, converge em poucas
+ * voltas. Para nao ficar num otimo local, recomeca de 26 pontos de partida e fica o melhor ajuste.
+ */
+static void estrutura_por_frequencia(Estrutura *e, const unsigned char *texto, size_t n) {
+    int periodo = estrutura_periodo(e);
+    double (*coluna)[26] = calloc((size_t) periodo, sizeof *coluna), melhor_total = -HUGE_VAL;
+    Estrutura melhor = *e;
+    uint32_t semente = 2166136261u;
+
+    if (coluna == NULL) {
+        return;
+    }
+    for (size_t i = 0; i < n; i++) {               /* coluna[c][s]: log-frequencia da coluna c com deslocamento s */
+        for (int d = 0; d < 26; d++) {
+            coluna[i % (size_t) periodo][d] += log_frequencia[(texto[i] - 'a' - d + 26) % 26];
+        }
+    }
+    for (int inicio = 0; inicio < 26; inicio++) {
+        Estrutura t = *e;
+        double total = 0;
+
+        for (int r = 0; r < MAX_PERIODO; r++) {
+            semente = semente * 1664525u + 1013904223u;
+            t.b[r] = r < t.p2 ? (int) ((semente >> 16) % 26) : 0;
+        }
+        for (int volta = 0; volta < 12; volta++) {
+            for (int lado = 0; lado < 2; lado++) {
+                int p = lado == 0 ? t.p1 : t.p2;
+                int *v = lado == 0 ? t.a : t.b;
+
+                for (int r = 0; r < p; r++) {
+                    double melhor_valor = -HUGE_VAL;
+
+                    for (int x = 0; x < 26; x++) {
+                        double soma = 0;
+
+                        for (int c = r; c < periodo; c += p) {
+                            int outro = lado == 0 ? t.b[c % t.p2] : t.a[c % t.p1];
+
+                            soma += coluna[c][(x + outro) % 26];
+                        }
+                        if (soma > melhor_valor) {
+                            melhor_valor = soma;
+                            v[r] = x;
+                        }
+                    }
+                }
+            }
+        }
+        for (int c = 0; c < periodo; c++) {
+            total += coluna[c][(t.a[c % t.p1] + t.b[c % t.p2]) % 26];
+        }
+        if (total > melhor_total) {
+            melhor_total = total;
+            melhor = t;
+        }
+    }
+    *e = melhor;
+    free(coluna);
+}
+
+/* Texto decifrado (em "saida") por [Atbash] e a chave da estrutura; devolve a pontuacao. */
+static double estrutura_pontuar(const Estrutura *e, const unsigned char *texto, size_t n, unsigned char *saida) {
+    int k[MAX_PERIODO];
+
+    estrutura_chave(e, k);
+    vigenere_decifrar_buffer(texto, n, k, estrutura_periodo(e), saida);
+    return pontuacao(saida, n);
+}
+
+/* Refinamento: cada letra de a e de b pelo melhor dos 26 valores, ate nada mudar (no maximo 4 rodadas). */
+static void estrutura_refinar(Estrutura *e, const unsigned char *texto, size_t n, unsigned char *tmp) {
+    double atual = estrutura_pontuar(e, texto, n, tmp);
+
+    for (int rodada = 0, mudou = 1; mudou && rodada < 4; rodada++) {
+        mudou = 0;
+        for (int lado = 0; lado < (e->p2 > 1 ? 2 : 1); lado++) {
+            int *v = lado == 0 ? e->a : e->b;
+
+            for (int r = 0; r < (lado == 0 ? e->p1 : e->p2); r++) {
+                int original = v[r];
+
+                for (int s = 0; s < 26; s++) {
+                    double pts;
+
+                    if (s == original) {
+                        continue;
+                    }
+                    v[r] = s;
+                    pts = estrutura_pontuar(e, texto, n, tmp);
+                    if (pts > atual + 1e-9) {
+                        atual = pts;
+                        original = s;
+                        mudou = 1;
+                    }
+                }
+                v[r] = original;
+            }
+        }
+    }
+}
+
+#define MAX_FILHOS 16
 #define MAX_ALTERNATIVAS 4
 
 /*
@@ -1470,21 +1779,30 @@ static int gerar_deslocamentos(const Hipotese *base, Opcoes *op, Hipotese *saida
         }
     }
 
-    /* Vigenere de 2 letras ou mais. Texto com IC de texto natural so pode ser monoalfabetico
-       (ou ja estar em claro): a busca polialfabetica seria desperdicio. */
-    if (op->max_periodo >= 2 && !(base->n >= 80 && base->ic >= 0.074) && !sem_tempo(op)) {
+    /* Vigenere de 2 letras ou mais (no maximo n/4: pelo menos 4 letras por coluna). Texto com IC de texto
+       natural so pode ser monoalfabetico (ou ja estar em claro): a busca polialfabetica seria desperdicio. */
+    int max_periodo = op->max_periodo < (int) (base->n / 4) ? op->max_periodo : (int) (base->n / 4);
+
+    if (max_periodo >= 2 && !(base->n >= 80 && base->ic >= 0.074) && !sem_tempo(op)) {
         ChaveVigenere por_tamanho[MAX_PERIODO + 1], escolhida;
 
-        if (buscar_vigenere(base->texto, base->n, &escolhida, por_tamanho, op->max_periodo) > 0) {
-            int segundo = 0;
+        if (buscar_vigenere(base->texto, base->n, &escolhida, por_tamanho, max_periodo) > 0) {
+            int segundo = 0, pelo_ic = estimar_periodo_ic(base->texto, base->n, max_periodo, NULL);
 
-            for (int tam = 2; tam <= op->max_periodo && (size_t) tam <= base->n; tam++) {
+            for (int tam = 2; tam <= max_periodo && (size_t) tam <= base->n; tam++) {
                 if (tam != escolhida.tam && (segundo == 0 || por_tamanho[tam].pontos > por_tamanho[segundo].pontos)) {
                     segundo = tam;
                 }
             }
-            for (int v = 0; v < 2; v++) {
-                const ChaveVigenere *k = v == 0 ? &escolhida : (segundo > 0 ? &por_tamanho[segundo] : NULL);
+            /* Chaves longas sempre se ajustam um pouco melhor; o periodo que o IC das colunas aponta tambem
+               entra, porque com muitos nomes proprios a chave certa pode pontuar menos que uma longa errada. */
+            if (pelo_ic == escolhida.tam || pelo_ic == segundo) {
+                pelo_ic = 0;
+            }
+            for (int v = 0; v < 3; v++) {
+                const ChaveVigenere *k = v == 0 ? &escolhida
+                                       : v == 1 ? (segundo > 0 ? &por_tamanho[segundo] : NULL)
+                                                : (pelo_ic >= 2 ? &por_tamanho[pelo_ic] : NULL);
 
                 if (k == NULL || k->tam < 2) {
                     continue;
@@ -1494,6 +1812,56 @@ static int gerar_deslocamentos(const Hipotese *base, Opcoes *op, Hipotese *saida
                 memcpy(camada.desl, k->desl, sizeof(int) * (size_t) k->tam);
                 if (q < cap && hip_derivar(base, &camada, &saida[q])) {
                     q++;
+                }
+            }
+
+            /* Duas Vigenere em sequencia (so com limite acima do regulamento): a chave efetiva tem mmc letras, mas so
+               p1 + p2 - 1 livres. Com poucas letras por coluna, a chave livre de mmc letras se ajusta errado em
+               varias colunas; a estrutura (cada letra apoiada em n/p1 ou n/p2 letras) e bem mais firme. A melhor
+               estrutura, ajustada a chave livre do mesmo periodo e refinada, entra como mais uma hipotese. */
+            if (max_periodo > MAX_CHAVE_VIGENERE && q < cap && !sem_tempo(op)) {
+                unsigned char *tmp2 = malloc(base->n > 0 ? base->n : 1);
+                Estrutura melhor;
+                double melhor_pts = -HUGE_VAL;
+
+                for (int p1 = 2; tmp2 != NULL && p1 <= MAX_CHAVE_VIGENERE; p1++) {
+                    for (int p2 = p1 + 1; p2 <= MAX_CHAVE_VIGENERE; p2++) {
+                        Estrutura e;
+                        int periodo;
+                        double pts;
+
+                        e.p1 = p1;
+                        e.p2 = p2;
+                        periodo = estrutura_periodo(&e);
+                        if (p2 % p1 == 0 || periodo <= MAX_CHAVE_VIGENERE || periodo > max_periodo) {
+                            continue;
+                        }
+                        for (int partida = 0; partida < 2; partida++) {     /* pela frequencia e pela chave livre */
+                            Estrutura t = e;
+
+                            if (partida == 0) {
+                                estrutura_por_frequencia(&t, base->texto, base->n);
+                            } else {
+                                estrutura_ajustar(&t, por_tamanho[periodo].desl, periodo);
+                            }
+                            estrutura_refinar(&t, base->texto, base->n, tmp2);
+                            pts = estrutura_pontuar(&t, base->texto, base->n, tmp2);
+                            if (pts > melhor_pts) {
+                                melhor_pts = pts;
+                                melhor = t;
+                            }
+                        }
+                    }
+                }
+                free(tmp2);
+                if (melhor_pts > -HUGE_VAL) {
+                    camada.reflexo = 0;
+                    camada.tam = estrutura_periodo(&melhor);
+                    estrutura_chave(&melhor, camada.desl);
+                    if (hip_derivar(base, &camada, &saida[q])) {
+                        saida[q].livres = base->livres + melhor.p1 + melhor.p2 - 1;
+                        q++;
+                    }
                 }
             }
         }
@@ -1533,6 +1901,8 @@ typedef struct {
     int conclusivo;
     int tempo_esgotado;
     int avaliadas;
+    int tem_provavel;                        /* achou uma hipotese pelo criterio da estrutura (hip_provavel) */
+    Hipotese provavel;                       /* a de menor chave efetiva entre essas */
     Hipotese escolhida;                      /* a conclusiva, ou a melhor tentativa */
     Hipotese alternativas[MAX_ALTERNATIVAS]; /* outras hipoteses promissoras, da melhor para a pior */
     int qtd_alt;
@@ -1540,6 +1910,10 @@ typedef struct {
 
 static void liberar_resultado(Resultado *r) {
     hip_liberar(&r->escolhida);
+    if (r->tem_provavel) {
+        hip_liberar(&r->provavel);
+        r->tem_provavel = 0;
+    }
     for (int i = 0; i < r->qtd_alt; i++) {
         hip_liberar(&r->alternativas[i]);
     }
@@ -1574,20 +1948,47 @@ static void registrar_alternativa(Resultado *r, const Hipotese *h) {
     }
 }
 
+typedef struct Efetivo Efetivo;
+static int calcular_efetivo(const Camada *camadas, int qtd, Efetivo *ef);
+static int simplificar_chave(const unsigned char *y, size_t n, const Hipotese *h, double unigrama_raiz, int com_xor,
+                             Hipotese *saida);
+static int polir_chave(const unsigned char *y, size_t n, const Hipotese *h, Hipotese *saida);
+
+/* Guarda h como a hipotese "provavel" se passar no criterio da estrutura e tiver chave efetiva menor
+   (menos chance de ser ajuste) ou, com a mesma chave, a metade mais natural melhor. */
+static void considerar_provavel(Resultado *r, const Hipotese *h, double unigrama_raiz, int com_xor) {
+    if (!hip_provavel(h, unigrama_raiz, com_xor)) {
+        return;
+    }
+    if (r->tem_provavel) {
+        if (h->periodo > r->provavel.periodo
+            || (h->periodo == r->provavel.periodo
+                && media_melhor_metade(h->texto, h->n) <= media_melhor_metade(r->provavel.texto, r->provavel.n))) {
+            return;
+        }
+        hip_liberar(&r->provavel);
+        r->tem_provavel = 0;
+    }
+    r->tem_provavel = hip_copiar(h, &r->provavel);
+}
+
 /*
  * Busca em feixe sobre as camadas externas. Nivel 0: o proprio texto (se ja e natural, nao ha
  * cifra). Nivel k: cada hipotese do feixe gera filhos (uma camada a mais desfeita); filho que nao
  * melhora o texto em GANHO_MINIMO e descartado; se algum filho e natural a busca termina; senao
  * ficam as LARGURA_FEIXE melhores e o processo se repete, ate max_camadas ou o tempo acabar.
  */
-static int resolver_camadas(const unsigned char *y, size_t n, Opcoes *op, Resultado *res) {
+static int resolver_camadas(const unsigned char *y, size_t n, Opcoes *op, Resultado *res, int com_xor) {
     Hipotese feixe[LARGURA_FEIXE], novos[LARGURA_FEIXE * MAX_FILHOS];
     uint64_t vistos[512];
     int qf = 0, qv = 0;
     Hipotese raiz;
+    double unigrama_raiz = media_unigramas(y, n);
 
     memset(res, 0, sizeof *res);
     raiz.qtd = 0;
+    raiz.periodo = 0;
+    raiz.livres = 0;
     raiz.n = n;
     raiz.texto = malloc(n > 0 ? n : 1);
     if (raiz.texto == NULL) {
@@ -1605,6 +2006,7 @@ static int resolver_camadas(const unsigned char *y, size_t n, Opcoes *op, Result
         hip_liberar(&raiz);
         return 1;
     }
+    considerar_provavel(res, &raiz, unigrama_raiz, com_xor);
     if (n < MIN_LETRAS) {          /* sem estatistica suficiente: procurar cifras so geraria texto enganoso */
         hip_liberar(&raiz);
         return 1;
@@ -1652,7 +2054,10 @@ static int resolver_camadas(const unsigned char *y, size_t n, Opcoes *op, Result
         }
         for (int i = 0; i < qn; i++) {
             registrar_alternativa(res, &novos[i]);
-            if (hip_natural(&novos[i]) && (natural < 0 || novos[i].media > novos[natural].media)) {
+            considerar_provavel(res, &novos[i], unigrama_raiz, com_xor);
+            /* entre as naturais, a de maior folga sobre o proprio limiar (chave longa exige mais) */
+            if (hip_natural(&novos[i])
+                && (natural < 0 || novos[i].media - hip_limiar(&novos[i]) > novos[natural].media - hip_limiar(&novos[natural]))) {
                 natural = i;
             }
         }
@@ -1683,6 +2088,59 @@ static int resolver_camadas(const unsigned char *y, size_t n, Opcoes *op, Result
     for (int b = 0; b < qf; b++) {
         hip_liberar(&feixe[b]);
     }
+
+    /* Chave mais simples (repeticao de uma menor, ou duas Vigenere somadas) que tambem seja aceita vence a
+       encontrada: menos letras livres, menos chance de ser ajuste (ver simplificar_chave). */
+    Hipotese *alvo = res->conclusivo ? &res->escolhida
+                   : res->tem_provavel ? &res->provavel
+                   : res->escolhida.qtd > 0 ? &res->escolhida : NULL;  /* a melhor tentativa recusada tambem */
+    Hipotese simples;
+    int aceita = alvo != NULL ? simplificar_chave(y, n, alvo, unigrama_raiz, com_xor, &simples) : 0;
+
+    if (aceita == 1) {                        /* a simples e natural: substitui a escolhida */
+        hip_liberar(&res->escolhida);
+        res->escolhida = simples;
+        res->conclusivo = 1;
+    } else if (aceita == 2) {                 /* a simples so passa pela estrutura: ainda assim vence a longa */
+        if (res->tem_provavel) {
+            hip_liberar(&res->provavel);
+        }
+        res->provavel = simples;
+        res->tem_provavel = 1;
+        res->conclusivo = 0;
+    }
+    /* A chave final e refinada letra a letra: as camadas foram ajustadas uma de cada vez e, juntas, uma letra
+       ainda pode melhorar o texto (coluna errada). Pela estrutura so vale chave em que nenhuma letra sozinha
+       melhora o texto. A chave simplificada ja foi refinada dentro da propria estrutura: solta, voltaria ao ajuste. */
+    if (aceita == 0 && res->conclusivo) {
+        Hipotese polida;
+
+        if (polir_chave(y, n, &res->escolhida, &polida)) {
+            if (hip_natural(&polida)) {
+                hip_liberar(&res->escolhida);
+                res->escolhida = polida;
+            } else {
+                hip_liberar(&polida);
+            }
+        }
+    } else if (aceita == 0 && res->tem_provavel) {
+        Hipotese polida;
+
+        if (polir_chave(y, n, &res->provavel, &polida)) {
+            hip_liberar(&res->provavel);
+            res->tem_provavel = 0;
+            if (hip_natural(&polida)) {
+                hip_liberar(&res->escolhida);
+                res->escolhida = polida;
+                res->conclusivo = 1;
+            } else if (hip_provavel(&polida, unigrama_raiz, com_xor)) {
+                res->provavel = polida;
+                res->tem_provavel = 1;
+            } else {
+                hip_liberar(&polida);
+            }
+        }
+    }
     res->tempo_esgotado = op->tempo_esgotado;
     return 1;
 }
@@ -1695,15 +2153,11 @@ static int resolver_camadas(const unsigned char *y, size_t n, Opcoes *op, Result
  * Efeito total das camadas desfeitas, na forma canonica: desfazer = [Atbash] e depois subtrair a chave
  * k de "periodo" letras (periodo 1 = Cesar). Em ordem de CIFRAGEM: Vigenere(k) e, se reflexo, depois Atbash.
  */
-typedef struct {
+struct Efetivo {
     int reflexo;
     int periodo;
     int k[MAX_EFETIVO];
-} Efetivo;
-
-static int mdc(int a, int b) {
-    return b == 0 ? a : mdc(b, a % b);
-}
+};
 
 static int calcular_efetivo(const Camada *camadas, int qtd, Efetivo *ef) {
     int t[MAX_EFETIVO], periodo = 1, sinal = 1;
@@ -1747,6 +2201,302 @@ static int calcular_efetivo(const Camada *camadas, int qtd, Efetivo *ef) {
         ef->k[j] = sinal > 0 ? (26 - t[j]) % 26 : ((25 - t[j]) % 26 + 26) % 26;
     }
     return 1;
+}
+
+/*
+ * Simplificacao da chave efetiva. Uma chave longa encontrada pela busca pode ser AJUSTE: com muitos nomes proprios
+ * (Mamardashvili, Kvaratskhelia), trocar algumas letras de uma chave de 15 letras "acerta" trigramas desses nomes
+ * e a media sobe, mesmo com a chave errada. A chave verdadeira costuma ter estrutura:
+ *   - ser a repeticao de uma chave menor (uma Vigenere de d letras, d divisor do periodo);
+ *   - ou a soma de duas chaves periodicas (duas Vigenere em sequencia: k[i] = a[i % p1] + b[i % p2], periodo mmc).
+ * Cada estrutura com MENOS letras livres que a chave encontrada e ajustada a ela (letra mais votada, alternando
+ * a e b), refinada letra a letra pela pontuacao do texto inteiro e avaliada de novo. Fica a estrutura aceita
+ * (pela media ou pela estrutura da cifra) com menos letras livres, desde que o texto dela perca no maximo
+ * CUSTO_LETRA_LIVRE nats (soma dos trigramas) por letra livre economizada: uma letra de ajuste so "compra" uns
+ * 4 a 5 nats; uma coluna errada de verdade custa dezenas. Assim duas Vigenere verdadeiras, ou uma chave como
+ * "uxut" (que lembra "ut" repetida), nunca sao trocadas por uma estrutura menor com colunas erradas.
+ */
+#define CUSTO_LETRA_LIVRE 8.0
+
+/* Hipotese "desfazer [Atbash] e a Vigenere da estrutura" a partir do texto y. */
+static int hip_da_estrutura(const unsigned char *y, size_t n, int reflexo, const Estrutura *e, Hipotese *saida) {
+    Hipotese raiz, meio;
+    Camada camada;
+    int ok;
+
+    memset(&raiz, 0, sizeof raiz);
+    raiz.texto = (unsigned char *) y;
+    raiz.n = n;
+    memset(&camada, 0, sizeof camada);
+    meio = raiz;
+    if (reflexo) {
+        camada.reflexo = 1;
+        camada.tam = 1;
+        if (!hip_derivar(&raiz, &camada, &meio)) {
+            return 0;
+        }
+        camada.reflexo = 0;
+    }
+    camada.tam = estrutura_periodo(e);
+    estrutura_chave(e, camada.desl);
+    ok = hip_derivar(&meio, &camada, saida);
+    if (ok) {
+        saida->livres = e->p1 + (e->p2 > 1 ? e->p2 - 1 : 0);
+    }
+    if (reflexo) {
+        hip_liberar(&meio);
+    }
+    return ok;
+}
+
+/* Retorna 0 (nada mudou), 1 (estrutura aceita pela media de trigramas) ou 2 (aceita pela estrutura da cifra). */
+static int simplificar_chave(const unsigned char *y, size_t n, const Hipotese *h, double unigrama_raiz, int com_xor,
+                             Hipotese *saida) {
+    Efetivo ef;
+    Estrutura opcoes[64];
+    int qtd = 0, aceita = 0;
+    unsigned char *base, *tmp;
+
+    if (!calcular_efetivo(h->camadas, h->qtd, &ef) || ef.periodo < 2 || ef.periodo > MAX_PERIODO) {
+        return 0;
+    }
+    for (int p1 = 1; p1 < ef.periodo; p1++) {               /* estruturas com menos letras livres que a chave */
+        for (int p2 = 1; p2 <= MAX_PERIODO && qtd < 64; p2++) {
+            Estrutura e;
+
+            if ((p2 > 1 && (p2 <= p1 || p2 % p1 == 0)) || (p2 == 1 && ef.periodo % p1 != 0)) {
+                continue;
+            }
+            e.p1 = p1;
+            e.p2 = p2;
+            if (ef.periodo % estrutura_periodo(&e) != 0 || p1 + p2 - (p2 > 1) >= ef.periodo) {
+                continue;
+            }
+            opcoes[qtd++] = e;
+        }
+    }
+    for (int i = 1; i < qtd; i++) {                       /* menos letras livres primeiro */
+        Estrutura atual = opcoes[i];
+        int j = i - 1, livres = atual.p1 + atual.p2;
+
+        while (j >= 0 && opcoes[j].p1 + opcoes[j].p2 > livres) {
+            opcoes[j + 1] = opcoes[j];
+            j--;
+        }
+        opcoes[j + 1] = atual;
+    }
+
+    base = malloc(n > 0 ? n : 1);
+    tmp = malloc(n > 0 ? n : 1);
+    if (base == NULL || tmp == NULL) {
+        free(base);
+        free(tmp);
+        return 0;
+    }
+    for (size_t i = 0; i < n; i++) {
+        base[i] = ef.reflexo ? (unsigned char) ('z' - (y[i] - 'a')) : y[i];
+    }
+    for (int o = 0; o < qtd && !aceita; o++) {
+        Estrutura *e = &opcoes[o];
+        Hipotese candidata;
+
+        /* A chave so "tem" a estrutura se ela explica muito mais letras do que tem letras livres: com poucas
+           letras livres a mais, qualquer chave bate em algumas posicoes por acaso. */
+        int livres = e->p1 + (e->p2 > 1 ? e->p2 - 1 : 0);
+
+        if (4 * (estrutura_ajustar(e, ef.k, ef.periodo) - livres) < ef.periodo) {
+            continue;
+        }
+        estrutura_refinar(e, base, n, tmp);
+        if (!hip_da_estrutura(y, n, ef.reflexo, e, &candidata)) {
+            break;
+        }
+        aceita = hip_natural(&candidata) ? 1 : hip_provavel(&candidata, unigrama_raiz, com_xor) ? 2 : 0;
+        if ((h->media - candidata.media) * (double) n > CUSTO_LETRA_LIVRE * (double) (h->livres - livres)) {
+            aceita = 0;                                      /* perde demais: a estrutura deixou colunas erradas */
+        }
+        if (aceita) {
+            *saida = candidata;
+        } else {
+            hip_liberar(&candidata);
+        }
+    }
+    free(base);
+    free(tmp);
+    return aceita;
+}
+
+/*
+ * Refinamento de DUAS letras vizinhas da chave ao mesmo tempo (26 x 26 combinacoes). Colunas vizinhas erradas
+ * podem formar trigramas "plausiveis" entre si: trocar uma letra so piora, trocar as duas melhora. A soma dos
+ * trigramas (no melhor idioma) so e recalculada nos trigramas que tocam as duas colunas.
+ * texto: ja sem o Atbash (decifrar = subtrair a chave). k: chave de p letras (alterada no lugar).
+ */
+static void refinar_pares(const unsigned char *texto, size_t n, int *k, int p) {
+    unsigned char *u = malloc(n > 0 ? n : 1), *marca = calloc(n > 0 ? n : 1, 1);
+    size_t *fins = malloc(sizeof(size_t) * (n > 0 ? n : 1));
+    double total[QTD_IDIOMAS] = {0};
+
+    if (u == NULL || marca == NULL || fins == NULL || p < 2 || n < 3) {
+        free(u);
+        free(marca);
+        free(fins);
+        return;
+    }
+    vigenere_decifrar_buffer(texto, n, k, p, u);
+    for (int l = 0; l < QTD_IDIOMAS; l++) {
+        for (size_t i = 2; i < n; i++) {
+            total[l] -= IDIOMAS[l].tabela[(u[i - 2] - 'a') * 676 + (u[i - 1] - 'a') * 26 + (u[i] - 'a')] / 16.0;
+        }
+    }
+    for (int rodada = 0, mudou = 1; mudou && rodada < 3; rodada++) {
+        mudou = 0;
+        for (int j = 0; j < (p == 2 ? 1 : p); j++) {
+            int j2 = (j + 1) % p, melhor_a = k[j], melhor_b = k[j2];
+            size_t qtd = 0;
+            double antes[QTD_IDIOMAS] = {0}, melhor_total = -HUGE_VAL;
+
+            for (size_t i = 0; i < n; i++) {           /* fins dos trigramas que tocam as colunas j e j2 */
+                if ((int) (i % (size_t) p) == j || (int) (i % (size_t) p) == j2) {
+                    for (size_t f = i; f <= i + 2 && f < n; f++) {
+                        if (f >= 2 && !marca[f]) {
+                            marca[f] = 1;
+                            fins[qtd++] = f;
+                        }
+                    }
+                }
+            }
+            for (size_t q = 0; q < qtd; q++) {
+                marca[fins[q]] = 0;
+            }
+            for (int l = 0; l < QTD_IDIOMAS; l++) {
+                for (size_t q = 0; q < qtd; q++) {
+                    size_t f = fins[q];
+
+                    antes[l] -= IDIOMAS[l].tabela[(u[f - 2] - 'a') * 676 + (u[f - 1] - 'a') * 26 + (u[f] - 'a')] / 16.0;
+                }
+                if (total[l] > melhor_total) {
+                    melhor_total = total[l];
+                }
+            }
+            for (int a = 0; a < 26; a++) {
+                for (int b = 0; b < 26; b++) {
+                    double valor = -HUGE_VAL;
+
+                    for (size_t i = (size_t) j; i < n; i += (size_t) p) {
+                        u[i] = (unsigned char) ('a' + ((texto[i] - 'a') - a + 26) % 26);
+                    }
+                    for (size_t i = (size_t) j2; i < n; i += (size_t) p) {
+                        u[i] = (unsigned char) ('a' + ((texto[i] - 'a') - b + 26) % 26);
+                    }
+                    for (int l = 0; l < QTD_IDIOMAS; l++) {
+                        double depois = 0;
+
+                        for (size_t q = 0; q < qtd; q++) {
+                            size_t f = fins[q];
+
+                            depois -= IDIOMAS[l].tabela[(u[f - 2] - 'a') * 676 + (u[f - 1] - 'a') * 26 + (u[f] - 'a')] / 16.0;
+                        }
+                        if (total[l] - antes[l] + depois > valor) {
+                            valor = total[l] - antes[l] + depois;
+                        }
+                    }
+                    if (valor > melhor_total + 1e-9) {
+                        melhor_total = valor;
+                        melhor_a = a;
+                        melhor_b = b;
+                    }
+                }
+            }
+            if (melhor_a != k[j] || melhor_b != k[j2]) {
+                mudou = 1;
+            }
+            k[j] = melhor_a;
+            k[j2] = melhor_b;
+            vigenere_decifrar_buffer(texto, n, k, p, u);
+            for (int l = 0; l < QTD_IDIOMAS; l++) {
+                total[l] = 0;
+                for (size_t i = 2; i < n; i++) {
+                    total[l] -= IDIOMAS[l].tabela[(u[i - 2] - 'a') * 676 + (u[i - 1] - 'a') * 26 + (u[i] - 'a')] / 16.0;
+                }
+            }
+        }
+    }
+    free(u);
+    free(marca);
+    free(fins);
+}
+
+/* Refina a chave efetiva de h (sem mudar o tamanho): letra a letra e de duas em duas. Retorna 0 se nao conseguiu. */
+static int polir_chave(const unsigned char *y, size_t n, const Hipotese *h, Hipotese *saida) {
+    Efetivo ef;
+    Estrutura e;
+    unsigned char *base, *tmp;
+    int ok;
+
+    if (!calcular_efetivo(h->camadas, h->qtd, &ef) || ef.periodo > MAX_PERIODO
+        || (!ef.reflexo && ef.periodo == 1 && ef.k[0] == 0)) {      /* sem cifra de letras: nada a polir */
+        return 0;
+    }
+    base = calloc(n > 0 ? n : 1, 1);
+    tmp = malloc(n > 0 ? n : 1);
+    if (base == NULL || tmp == NULL) {
+        free(base);
+        free(tmp);
+        return 0;
+    }
+    for (size_t i = 0; i < n; i++) {
+        base[i] = ef.reflexo ? (unsigned char) ('z' - (y[i] - 'a')) : y[i];
+    }
+    e.p1 = ef.periodo;
+    e.p2 = 1;
+    memcpy(e.a, ef.k, sizeof(int) * (size_t) ef.periodo);
+    estrutura_refinar(&e, base, n, tmp);
+    refinar_pares(base, n, e.a, e.p1);
+    ok = hip_da_estrutura(y, n, ef.reflexo, &e, saida);
+    if (ok && h->livres < saida->livres) {
+        saida->livres = h->livres;           /* polir nao cria letras livres novas: so troca as que ja havia */
+    }
+    free(base);
+    free(tmp);
+    return ok;
+}
+
+/*
+ * Chave (de "periodo" letras) que e a soma EXATA de duas chaves de Vigenere de ate MAX_CHAVE_VIGENERE letras cada
+ * (duas Vigenere em sequencia: o periodo e o mmc). Fica a de menos letras. A segunda chave comeca em "a" (o
+ * deslocamento comum fica na primeira). Retorna 1 e a estrutura, ou 0.
+ */
+static int decompor_duas_vigenere(const int *k, int periodo, Estrutura *saida) {
+    int achou = 0;
+
+    if (periodo <= MAX_CHAVE_VIGENERE || periodo > MAX_PERIODO) {
+        return 0;
+    }
+    for (int p1 = 2; p1 <= MAX_CHAVE_VIGENERE; p1++) {
+        for (int p2 = p1 + 1; p2 <= MAX_CHAVE_VIGENERE; p2++) {
+            Estrutura e;
+
+            e.p1 = p1;
+            e.p2 = p2;
+            if (p2 % p1 == 0 || estrutura_periodo(&e) != periodo || (achou && p1 + p2 >= saida->p1 + saida->p2)) {
+                continue;
+            }
+            if (estrutura_ajustar(&e, k, periodo) == periodo) {
+                int d = e.b[0];
+
+                for (int r = 0; r < p2; r++) {
+                    e.b[r] = (e.b[r] - d + 26) % 26;
+                }
+                for (int r = 0; r < p1; r++) {
+                    e.a[r] = (e.a[r] + d) % 26;
+                }
+                *saida = e;
+                achou = 1;
+            }
+        }
+    }
+    return achou;
 }
 
 static int efetivo_sem_chave(const Efetivo *ef) {
@@ -1873,14 +2623,17 @@ static int decompor(const Efetivo *ef, int *cesar, int *k_vigenere) {
     return 1;
 }
 
-/* Linha de passo da analise: metricas de um texto intermediario. */
-static void emitir_passo(int numero, const char *acao, const unsigned char *texto, size_t n) {
+/* Uma linha da tabela de passos. limiar: o da chave efetiva encontrada. final_estrutura: este e o ultimo passo
+   de um resultado aceito pela estrutura da cifra (hip_provavel), e nao pela media de trigramas. */
+static void emitir_passo(int numero, const char *acao, const unsigned char *texto, size_t n, double limiar,
+                         int final_estrutura) {
     int idioma = 0;
     double media = media_trigramas(texto, n, &idioma), ic = indice_coincidencia(texto, n);
-    int natural = n >= MIN_LETRAS && media >= limiar_natural(n);
+    int natural = n >= MIN_LETRAS && media >= limiar;
 
     fprintf(stderr, "@passo %d | %s | %.4f | %.2f | %s | %s\n", numero, acao, ic, media, IDIOMAS[idioma].nome,
-            natural ? "texto natural: fim" : "ainda parece cifrado: continua");
+            natural ? "texto natural: fim"
+                    : final_estrutura ? "aceito pela estrutura da cifra: fim" : "ainda parece cifrado: continua");
 }
 
 /* ---------- automatico (fases 3 e 4 e qualquer sequencia de cifras de letras) ---------- */
@@ -1946,10 +2699,13 @@ static int conferir_forma(const Efetivo *ef, int atbash_primeiro, const Hipotese
     return igual;
 }
 
-/* Maior pontuacao entre as chaves XOR candidatas: conclusivo antes de inconclusivo, depois a media. */
+/* Maior pontuacao entre as chaves XOR candidatas: conclusivo, depois decidido pela estrutura, depois a media. */
 static int melhor_resultado(const Resultado *a, const Resultado *b) {
     if (a->conclusivo != b->conclusivo) {
         return a->conclusivo;
+    }
+    if (!a->conclusivo && a->tem_provavel != b->tem_provavel) {
+        return a->tem_provavel;
     }
     return a->escolhida.media >= b->escolhida.media;
 }
@@ -1985,7 +2741,7 @@ static void emitir_inconclusivo(const Resultado *r, size_t n, const Opcoes *op, 
         motivo = texto;
     }
     fprintf(stderr, "@status inconclusivo | %s\n", motivo);
-    fprintf(stderr, "@pontuacao %.2f | %.2f | %zu\n", r->escolhida.media, n >= MIN_LETRAS ? limiar_natural(n) : 0.0, n);
+    fprintf(stderr, "@pontuacao %.2f | %.2f | %zu\n", r->escolhida.media, n >= MIN_LETRAS ? hip_limiar(&r->escolhida) : 0.0, n);
     fprintf(stderr, "Não foi possível recuperar o texto com confiança. Nada foi apresentado como resultado "
                     "para não passar texto aleatório por descriptografia.\n");
     if (r->escolhida.qtd > 0) {
@@ -1996,7 +2752,7 @@ static void emitir_inconclusivo(const Resultado *r, size_t n, const Opcoes *op, 
 static int executar_automatico(unsigned char *entrada, size_t n_bruto, Opcoes *op) {
     XorBusca alternativas[MAX_ALTERNATIVAS_XOR], xr;
     Resultado melhor, atual;
-    int tem_melhor = 0, so_letras = 1, com_xor = 0, total_alt = 1, resultado = 1;
+    int tem_melhor = 0, so_letras = 1, com_xor = 0, total_alt = 1, resultado = 1, pela_estrutura = 0;
     size_t n = sem_quebra_final(entrada, n_bruto), nb = n;
     long qtd_cod = 0;
     unsigned char *cod = NULL, *base = entrada;
@@ -2034,35 +2790,49 @@ static int executar_automatico(unsigned char *entrada, size_t n_bruto, Opcoes *o
         }
     }
 
-    /* Cada chave XOR finalista e analisada por inteiro; vence a que der o texto mais natural. */
-    for (int a = 0; a < total_alt; a++) {
-        if (com_xor) {
-            nb = xor_para_buffer(cod, (size_t) qtd_cod, alternativas[a].chave, alternativas[a].tam, base);
-            if (nb == 0) {
-                continue;
+    /* Cada chave XOR finalista e analisada por inteiro; vence a que der o texto mais natural. Em duas fases: primeiro
+       com chave de Vigenere de ate MAX_CHAVE_VIGENERE letras (o regulamento; rapido) e, so se nada for aceito pela
+       media de trigramas, com o limite inteiro (duas Vigenere em sequencia somam chaves de mmc letras). */
+    {
+        int limite_periodo = op->max_periodo;
+
+        for (int fase = 0; fase < 2; fase++) {
+            if (fase == 1 && (limite_periodo <= MAX_CHAVE_VIGENERE || (tem_melhor && melhor.conclusivo))) {
+                break;
+            }
+            op->max_periodo = fase == 0 && limite_periodo > MAX_CHAVE_VIGENERE ? MAX_CHAVE_VIGENERE : limite_periodo;
+            for (int a = 0; a < total_alt; a++) {
+                if (com_xor) {
+                    nb = xor_para_buffer(cod, (size_t) qtd_cod, alternativas[a].chave, alternativas[a].tam, base);
+                    if (nb == 0) {
+                        continue;
+                    }
+                }
+                if (!resolver_camadas(base, nb, op, &atual, com_xor)) {
+                    fprintf(stderr, "Erro: memória insuficiente.\n");
+                    liberar_resultado(&atual);
+                    if (tem_melhor) {
+                        liberar_resultado(&melhor);
+                    }
+                    op->max_periodo = limite_periodo;
+                    goto fim;
+                }
+                if (!tem_melhor || melhor_resultado(&atual, &melhor)) {
+                    if (tem_melhor) {
+                        liberar_resultado(&melhor);
+                    }
+                    melhor = atual;
+                    tem_melhor = 1;
+                    xr = alternativas[a];
+                } else {
+                    liberar_resultado(&atual);
+                }
+                if (melhor.conclusivo && !com_xor) {
+                    break;
+                }
             }
         }
-        if (!resolver_camadas(base, nb, op, &atual)) {
-            fprintf(stderr, "Erro: memória insuficiente.\n");
-            liberar_resultado(&atual);
-            if (tem_melhor) {
-                liberar_resultado(&melhor);
-            }
-            goto fim;
-        }
-        if (!tem_melhor || melhor_resultado(&atual, &melhor)) {
-            if (tem_melhor) {
-                liberar_resultado(&melhor);
-            }
-            melhor = atual;
-            tem_melhor = 1;
-            xr = alternativas[a];
-        } else {
-            liberar_resultado(&atual);
-        }
-        if (melhor.conclusivo && !com_xor) {
-            break;
-        }
+        op->max_periodo = limite_periodo;
     }
     if (!tem_melhor) {
         fprintf(stderr, "Erro: o texto/arquivo está vazio.\n");
@@ -2097,7 +2867,13 @@ static int executar_automatico(unsigned char *entrada, size_t n_bruto, Opcoes *o
                 periodo, ic_colunas);
     }
 
-    if (!melhor.conclusivo || nb < MIN_LETRAS) {
+    if (!melhor.conclusivo && melhor.tem_provavel) {      /* aceito pela estrutura da cifra (confianca media) */
+        hip_liberar(&melhor.escolhida);
+        melhor.escolhida = melhor.provavel;
+        melhor.tem_provavel = 0;
+        pela_estrutura = 1;
+    }
+    if ((!melhor.conclusivo && !pela_estrutura) || nb < MIN_LETRAS) {
         emitir_inconclusivo(&melhor, nb, op, com_xor);
         resultado = 0;
         liberar_resultado(&melhor);
@@ -2111,8 +2887,9 @@ static int executar_automatico(unsigned char *entrada, size_t n_bruto, Opcoes *o
         Etapa etapas_alt[3];
         int qtd_etapas, qtd_alt_etapas = 0, cesar = 0, k_vig[MAX_EFETIVO], decomposto, primeiro, tem_forma_alt;
         char texto_cifras[160] = "", texto_chaves[256] = "", letras[96];
-        int verificado = 0, verificado_alt = 0;
+        int verificado = 0, verificado_alt = 0, duas_vigenere;
         int chave_forma[MAX_EFETIVO];
+        Estrutura duas;
 
         if (!calcular_efetivo(h->camadas, h->qtd, &ef)) {
             fprintf(stderr, "Erro: não foi possível resumir as camadas encontradas.\n");
@@ -2127,6 +2904,10 @@ static int executar_automatico(unsigned char *entrada, size_t n_bruto, Opcoes *o
             chave_atbash_primeiro(&ef, chave_forma);
         } else {
             memcpy(chave_forma, ef.k, sizeof(int) * (size_t) ef.periodo);
+        }
+        duas_vigenere = decompor_duas_vigenere(chave_forma, ef.periodo, &duas);
+        if (duas_vigenere) {
+            decomposto = 0;               /* a decomposicao em duas Vigenere explica melhor uma chave longa */
         }
 
         /* prova real, de cada forma: cifrar o texto claro com ela (+ XOR) e comparar com o arquivo */
@@ -2157,9 +2938,20 @@ static int executar_automatico(unsigned char *entrada, size_t n_bruto, Opcoes *o
 
         fwrite(h->texto, 1, h->n, stdout);
         {
-            double limiar = limiar_natural(h->n), margem = h->media - limiar;
+            double limiar = hip_limiar(h), margem = h->media - limiar;
 
-            fprintf(stderr, "@status conclusivo | %s\n", margem >= 0.6 ? "confiança alta" : margem >= 0.25 ? "confiança média" : "confiança baixa");
+            if (pela_estrutura) {
+                fprintf(stderr, "@status conclusivo | confiança média · decidido pela estrutura da cifra\n");
+                fprintf(stderr, "@estrutura Boa parte do texto não parece português nem inglês (nomes próprios, siglas ou "
+                                "outra língua): a média de trigramas do texto inteiro ficou em %.2f, abaixo do limiar %.2f. "
+                                "O resultado foi aceito pela estrutura da cifra: IC do texto decifrado %.4f (mínimo %.3f), "
+                                "frequência das letras %.2f (mínimo %.2f; no texto cifrado era %.2f) e a metade mais natural "
+                                "do texto com média de trigramas %.2f (mínimo %.2f). Leia o texto para confirmar.\n",
+                        h->media, limiar, h->ic, IC_ESTRUTURA, media_unigramas(h->texto, h->n), UNIGRAMA_ESTRUTURA,
+                        media_unigramas(base, nb), media_melhor_metade(h->texto, h->n), limiar_metade(h->n, h->periodo));
+            } else {
+                fprintf(stderr, "@status conclusivo | %s\n", margem >= 0.6 ? "confiança alta" : margem >= 0.25 ? "confiança média" : "confiança baixa");
+            }
             fprintf(stderr, "@pontuacao %.2f | %.2f | %zu\n", h->media, limiar, h->n);
         }
         fprintf(stderr, "@idioma %s\n", IDIOMAS[h->idioma].nome);
@@ -2182,7 +2974,8 @@ static int executar_automatico(unsigned char *entrada, size_t n_bruto, Opcoes *o
         }
 
         /* ---- passos da descriptografia, na ordem inversa da cifragem, com avaliacao de cada resultado ---- */
-        emitir_passo(0, com_xor ? "texto depois de desfazer o XOR" : "texto cifrado (entrada)", base, nb);
+        emitir_passo(0, com_xor ? "texto depois de desfazer o XOR" : "texto cifrado (entrada)", base, nb, hip_limiar(h),
+                     pela_estrutura && !ef.reflexo && efetivo_sem_chave(&ef));
         {
             unsigned char *passo = malloc(h->n > 0 ? h->n : 1), *proximo = malloc(h->n > 0 ? h->n : 1);
             Camada plano[3];
@@ -2227,14 +3020,26 @@ static int executar_automatico(unsigned char *entrada, size_t n_bruto, Opcoes *o
                         snprintf(acao, sizeof acao, "desfazer Vigenère (chave %s)%s", letras_plano,
                                  decomposto ? ", camada externa" : "");
                     }
-                    emitir_passo(p + 1, acao, passo, nb);
+                    emitir_passo(p + 1, acao, passo, nb, hip_limiar(h), pela_estrutura && p == qtd_plano - 1);
                 }
             }
             free(passo);
             free(proximo);
         }
 
-        if (decomposto) {
+        if (duas_vigenere) {
+            char chave_a[MAX_CHAVE_VIGENERE + 1], chave_b[MAX_CHAVE_VIGENERE + 1];
+
+            chave_para_letras(duas.a, duas.p1, chave_a, sizeof chave_a);
+            chave_para_letras(duas.b, duas.p2, chave_b, sizeof chave_b);
+            fprintf(stderr, "@decomposicao Vigenère (chave %s, %d letras, aplicada primeiro) → Vigenère (chave %s, %d letras, "
+                            "aplicada depois)\n", chave_a, duas.p1, chave_b, duas.p2);
+            fprintf(stderr, "@nota A chave efetiva tem %d letras porque é a soma de duas chaves de Vigenère, de %d e %d letras "
+                            "(o tamanho é o mmc). Essa decomposição reproduz exatamente a chave efetiva, mas o texto cifrado "
+                            "não prova a ordem das duas cifras nem como o deslocamento foi dividido entre elas (um César no meio "
+                            "soma do mesmo jeito). O que o texto cifrado prova é a camada efetiva: Vigenère com a chave %s.\n",
+                    ef.periodo, duas.p1, duas.p2, etapas[ef.reflexo && primeiro ? 1 : 0].chave);
+        } else if (decomposto) {
             chave_para_letras(k_vig, ef.periodo, letras, sizeof letras);
             fprintf(stderr, "@decomposicao César (deslocamento %d, camada interna, aplicada primeiro) → Vigenère (chave %s, camada "
                             "externa, aplicada depois)\n", cesar, letras);
@@ -2266,7 +3071,7 @@ static int executar_automatico(unsigned char *entrada, size_t n_bruto, Opcoes *o
         if (com_xor) {
             emitir_valores_xor(xr.chave, xr.tam);
         }
-        if (h->n < 20 * (size_t) (ef.periodo > 1 ? ef.periodo : 1)) {
+        if (h->n < 10 * (size_t) (ef.periodo > 1 ? ef.periodo : 1)) {
             fprintf(stderr, "Aviso: o texto é curto para uma chave de %d letras; confira o resultado.\n", ef.periodo);
         }
         for (int i = 0; i < melhor.qtd_alt; i++) {
@@ -2329,8 +3134,9 @@ static int avaliar_texto(unsigned char *texto, size_t n) {
     }
     media = media_trigramas(texto, n, &idioma);
     ic = indice_coincidencia(texto, n);
-    printf("@avaliacao media=%.4f ic=%.4f idioma=%s limiar=%.4f natural=%s letras=%zu\n", media, ic, IDIOMAS[idioma].nome,
-           limiar_natural(n), n >= MIN_LETRAS && media >= limiar_natural(n) ? "sim" : "nao", n);
+    printf("@avaliacao media=%.4f ic=%.4f idioma=%s limiar=%.4f natural=%s letras=%zu metade=%.4f unigramas=%.4f\n", media,
+           ic, IDIOMAS[idioma].nome, limiar_natural(n), n >= MIN_LETRAS && media >= limiar_natural(n) ? "sim" : "nao", n,
+           media_melhor_metade(texto, n), media_unigramas(texto, n));
     return 0;
 }
 

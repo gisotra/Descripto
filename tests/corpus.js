@@ -40,4 +40,16 @@ const EXEMPLO_CLARO = limpar(
 const EXEMPLO_CIFRADO =
   'wljtynfogusbqjtanzptxrzjuxmhpfccirkgbxmhxtvxtqntxvsdpnqxmhfjjmsqmsjxmhyslzjuwjzexfvjdxjgxmlwmdhrdhjpesbtjrtqhzjucfqkwbesglfvfjhrblhjocwhkfuhjgexdffgqtyigbhtxkqdwfgerv';
 
-module.exports = { limpar, PORTUGUES, INGLES, EXEMPLO_CLARO, EXEMPLO_CIFRADO };
+// Textos em português com MUITOS nomes próprios estrangeiros (escalações, enxadristas): a média de trigramas do texto
+// em claro fica abaixo do limiar de texto natural, como no lyr.txt da fase de testes (seleção georgiana).
+const NOMES_PROPRIOS = [
+  'A escalação da seleção georgiana é Mamardashvili, Kakabadze, Dvali, Lochoshvili, Sazonov, Kochorashvili, Chakvetadze, ' +
+    'Kvaratskhelia, Mikautadze, Davitashvili e Zivzivadze; o técnico Willy Sagnol escalou o time com três defensores para ' +
+    'enfrentar Portugal na Euro.',
+  'O polonês Szczesny jogou longe de casa enquanto Lewandowski, Zielinski e Krychowiak marcaram gols contra a seleção da ' +
+    'Eslováquia em Varsóvia; os jornalistas Brzeczek e Przybylski elogiaram a atuação do goleiro Wojciech na partida de ontem.',
+  'No torneio de xadrez de Moscou os jogadores Nepomniachtchi e Karjakin venceram Kramnik e Grischuk, enquanto Dubov e ' +
+    'Svidler empataram todas as partidas da tarde e os organizadores Zhukovsky e Tkachenko anunciaram a final para domingo.',
+].map(limpar);
+
+module.exports = { limpar, PORTUGUES, INGLES, EXEMPLO_CLARO, EXEMPLO_CIFRADO, NOMES_PROPRIOS };

@@ -6,8 +6,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { automatico, avaliar } = require('./motor');
-const { PORTUGUES, INGLES, EXEMPLO_CLARO, EXEMPLO_CIFRADO } = require('./corpus');
-const { aplicarEtapas, cesar, vigenere, atbash, substituicao, gerador, letrasAleatorias, chaveAleatoria, embaralhar, alfabetoEmbaralhado } = require('./cifras');
+const { PORTUGUES, INGLES, EXEMPLO_CLARO, EXEMPLO_CIFRADO, NOMES_PROPRIOS } = require('./corpus');
+const { aplicarEtapas, cesar, vigenere, atbash, xor, substituicao, gerador, letrasAleatorias, chaveAleatoria, embaralhar, alfabetoEmbaralhado } = require('./cifras');
 
 const TEXTOS = [...PORTUGUES.slice(0, 6), ...INGLES.slice(0, 4)];
 const idiomaDe = (texto) => (INGLES.includes(texto) || texto === EXEMPLO_CLARO ? 'inglês' : 'português');
@@ -218,6 +218,99 @@ test.describe('duas cifras em sequência', () => {
 });
 
 // ---------------------------------------------------------------------------------------------
+// ---------------------------------------------------------------------------------------------
+// Aplica uma cadeia descrita por letras: A = Atbash, C = César, V = Vigenère, X = XOR (sempre por último).
+function cifrarCadeia(claro, cadeia, aleatorio, letrasVigenere = () => 2 + Math.floor(aleatorio() * 5)) {
+  return cadeia.reduce((texto, c) => {
+    if (c === 'A') return atbash(texto);
+    if (c === 'C') return cesar(texto, 1 + Math.floor(aleatorio() * 25));
+    if (c === 'V') return vigenere(texto, chaveAleatoria(letrasVigenere(), aleatorio));
+    return xor(texto, Array.from({ length: 1 + Math.floor(aleatorio() * 2) }, () => 1 + Math.floor(aleatorio() * 255)));
+  }, claro);
+}
+
+// Resultado aceito pela estrutura da cifra: conclusivo, texto certo, prova real, aviso, mas média abaixo do limiar.
+function recuperarPelaEstrutura(cifrado, esperado) {
+  const r = automatico(cifrado);
+  assert.equal(r.status, 'conclusivo', `esperava conclusivo, veio ${r.status} (${r.detalhe}); média ${r.media} limiar ${r.limiar}`);
+  assert.equal(r.saida.replace(/\n$/, ''), esperado, `texto errado (${JSON.stringify(r.etapas)})`);
+  assert.equal(r.verificado, true, 'a prova real falhou');
+  assert.equal(aplicarEtapas(esperado, r.etapas), cifrado, `as etapas reportadas (${JSON.stringify(r.etapas)}) não reproduzem o texto cifrado`);
+  if (r.media < r.limiar) {
+    assert.match(r.detalhe, /estrutura da cifra/, 'abaixo do limiar, só pode ser aceito pela estrutura da cifra');
+    assert.match(r.stderr, /@estrutura .*Leia o texto para confirmar/, 'tem de avisar que boa parte do texto não parece português');
+  }
+  return r;
+}
+
+test.describe('três e quatro cifras em sequência', () => {
+  test('cadeias de 3 e 4 cifras (Atbash, César, Vigenère e XOR por último), chave de Vigenère de 2 a 6 letras', () => {
+    const aleatorio = gerador(61);
+    const cadeias = ['ACV', 'CVA', 'VAC', 'AVC', 'CAV', 'ACVX', 'CVAX', 'VCAX', 'AVCX', 'CAVX', 'ACVA', 'VACA'];
+    for (let i = 0; i < cadeias.length * 2; i++) {
+      const claro = TEXTOS[i % TEXTOS.length];
+      const cadeia = [...cadeias[i % cadeias.length]];
+      let cifrado = cifrarCadeia(claro, cadeia, aleatorio);
+      while (cifrado.endsWith('\n')) {    // último byte cifrado = quebra de linha: o regulamento manda ignorá-lo
+        cifrado = cifrarCadeia(claro, cadeia, aleatorio);
+      }
+      recuperar(cifrado, claro);
+    }
+  });
+
+  test('duas Vigenère em sequência: a chave efetiva tem o mmc das duas e é decomposta nas duas chaves', () => {
+    const casos = [['abc', 'fghij', 4], ['segredo', 'lyr', 0], ['abcd', 'xyz', 11], ['chave', 'abcd', 0]];
+    for (const [k1, k2, deslocamento] of casos) {
+      const claro = PORTUGUES[(k1.length + k2.length) % PORTUGUES.length];
+      const cifrado = cesar(vigenere(vigenere(claro, k1), k2), deslocamento || 26);
+      const r = recuperar(cifrado, claro);
+      const [p1, p2] = [k1.length, k2.length].sort((a, b) => a - b);
+      assert.match(r.decomposicao, new RegExp(`Vigenère \\(chave [a-z]{${p1}}, ${p1} letras.*Vigenère \\(chave [a-z]{${p2}}, ${p2} letras`),
+        `${k1}+${k2}: decomposição em duas chaves`);
+    }
+  });
+
+  test('texto com muitos nomes próprios (seleção georgiana): decifrado e aceito pela estrutura da cifra, com aviso', () => {
+    const claro = NOMES_PROPRIOS[0];
+    assert.equal(avaliar(claro).natural, false, 'o próprio texto claro fica abaixo do limiar de texto natural');
+    const aleatorio = gerador(62);
+    for (const cadeia of ['ACV', 'CVA', 'VAC', 'ACVX', 'CVAX', 'CAVX']) {
+      const r = recuperarPelaEstrutura(cifrarCadeia(claro, [...cadeia], aleatorio, () => 5), claro);
+      assert.match(r.detalhe, /estrutura da cifra/, cadeia);
+    }
+  });
+
+  test('textos com nomes próprios e duas Vigenère: a chave longa "de ajuste" nunca vence a chave certa', () => {
+    const aleatorio = gerador(63);
+    for (const claro of NOMES_PROPRIOS) {
+      for (const [k1, k2] of [['abc', 'fghij'], ['xk', 'pqr']]) {
+        recuperarPelaEstrutura(cesar(vigenere(vigenere(claro, k1), k2), 1 + Math.floor(aleatorio() * 25)), claro);
+      }
+    }
+  });
+
+  test('a simplificação da chave não troca a chave certa por uma menor com colunas erradas', () => {
+    // "uxut" lembra "ut" repetida; a chave de 14 letras de A → V(7) → V(2) → A tem vizinhas que enganam a busca letra a letra
+    for (const claro of TEXTOS) {
+      for (const chave of ['uxut', 'abab', 'mamae', 'rarara']) {
+        recuperar(vigenere(claro, chave), claro);
+      }
+    }
+    const claro = [...PORTUGUES, ...INGLES].join('').slice(2297, 2297 + 240);
+    recuperar(atbash(vigenere(vigenere(atbash(claro), 'oojccrj'), 'no')), claro);
+  });
+
+  test('cifras sem solução continuam inconclusivas com a busca de até 4 camadas e chave efetiva de até 24 letras', () => {
+    const aleatorio = gerador(64);
+    for (let i = 0; i < 8; i++) {
+      const claro = TEXTOS[i % TEXTOS.length];
+      assertInconclusivo(vigenere(embaralhar(claro, aleatorio), chaveAleatoria(31, aleatorio)), [], 'Vigenère de 31 letras sobre texto embaralhado');
+      assertInconclusivo(vigenere(substituicao(claro, alfabetoEmbaralhado(aleatorio)), chaveAleatoria(5, aleatorio)), [], 'substituição e depois Vigenère');
+      assertInconclusivo(xor(substituicao(claro, alfabetoEmbaralhado(aleatorio)), [17, 200]), [], 'substituição e depois XOR');
+    }
+  });
+});
+
 test.describe('resultados inconclusivos (nada de texto aleatório passando por sucesso)', () => {
   test('texto curto demais para uma conclusão confiável', () => {
     const aleatorio = gerador(31);
@@ -236,12 +329,12 @@ test.describe('resultados inconclusivos (nada de texto aleatório passando por s
     }
   });
 
-  test('cifras que o motor não resolve: Vigenère com chave de 12 e 20 letras, substituição, texto embaralhado', () => {
+  test('cifras que o motor não resolve: Vigenère com chave de 31 e 37 letras, substituição, texto embaralhado', () => {
     const aleatorio = gerador(33);
     for (let i = 0; i < 12; i++) {
       const claro = TEXTOS[i % TEXTOS.length];
-      assertInconclusivo(vigenere(claro, chaveAleatoria(12, aleatorio)), [], 'Vigenère de 12 letras');
-      assertInconclusivo(vigenere(claro, chaveAleatoria(20, aleatorio)), [], 'Vigenère de 20 letras');
+      assertInconclusivo(vigenere(claro, chaveAleatoria(31, aleatorio)), [], 'Vigenère de 31 letras');
+      assertInconclusivo(vigenere(claro, chaveAleatoria(37, aleatorio)), [], 'Vigenère de 37 letras');
       assertInconclusivo(substituicao(claro, alfabetoEmbaralhado(aleatorio)), [], 'substituição monoalfabética');
       assertInconclusivo(embaralhar(claro, aleatorio), [], 'texto embaralhado');
     }
@@ -258,8 +351,9 @@ test.describe('resultados inconclusivos (nada de texto aleatório passando por s
   test('o limite do período da chave é respeitado e configurável', () => {
     const claro = (PORTUGUES[0] + PORTUGUES[3]).slice(0, 250);
     const cifrado = vigenere(claro, 'qwhtpzmkdbfs');   // 12 letras
-    assertInconclusivo(cifrado, [], 'chave de 12 letras com o limite padrão de 8');
+    assertInconclusivo(cifrado, ['--max-periodo', '8'], 'chave de 12 letras com o limite de 8');
     recuperar(cifrado, claro, ['--max-periodo', '16']);
+    recuperar(cifrado, claro);                          // o padrão é 24 (duas Vigenère em sequência somam chaves)
   });
 
   test('o limite de tempo é respeitado e informado', () => {

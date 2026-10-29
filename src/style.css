@@ -327,6 +327,15 @@ button:disabled {
   font-weight: 600;
 }
 
+/* Resultado aceito pela estrutura da cifra (muitos nomes próprios ou palavras estrangeiras): ler para confirmar. */
+.aviso-estrutura {
+  padding: 8px 10px;
+  border-left: 4px solid var(--aviso);
+  background: var(--fundo);
+  color: var(--aviso);
+  font-size: 13px;
+}
+
 .decomposicao {
   padding: 8px 10px;
   border-left: 4px solid var(--destaque);

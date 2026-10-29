@@ -51,8 +51,9 @@
 
         <section id="chave-encontrada" class="chave-encontrada">
           <p class="ideal">Algoritmo ideal: <strong id="ideal-texto"></strong> <span id="ideal-tempo" class="discreto"></span></p>
-          <p id="dupla" class="selo selo-dupla" hidden>Criptografia dupla identificada: duas cifras aplicadas em sequência</p>
+          <p id="dupla" class="selo selo-dupla" hidden></p>
           <p id="confianca" class="confianca"></p>
+          <p id="aviso-estrutura" class="aviso-estrutura" hidden></p>
           <p id="verificacao" class="verificacao"></p>
           <table id="tabela-etapas" class="tabela">
             <caption>Cifras e chaves, na ordem em que foram aplicadas</caption>
@@ -98,11 +99,11 @@
       <div class="grade">
         <div>
           <label for="manual-camadas">Máximo de camadas (cifras em sequência)</label>
-          <input id="manual-camadas" type="number" min="1" max="4" value="3">
+          <input id="manual-camadas" type="number" min="1" max="4" value="4">
         </div>
         <div>
-          <label for="manual-periodo">Máximo de letras da chave de Vigenère</label>
-          <input id="manual-periodo" type="number" min="1" max="24" value="8">
+          <label for="manual-periodo">Máximo de letras da chave efetiva de Vigenère (duas em sequência somam)</label>
+          <input id="manual-periodo" type="number" min="1" max="24" value="24">
         </div>
       </div>
       <label for="manual-chave">Chave (vazia = testar todas as possibilidades)</label>

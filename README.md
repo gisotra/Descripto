@@ -61,7 +61,7 @@ node scripts/hash-fonte.js
 1. A lista abre na pasta **Downloads** (no Mint pode se chamar "Transferências"), com o `.txt`
    mais recente já selecionado. Aperte `Espaço`.
 2. Em poucos milissegundos a tela mostra:
-   - o **algoritmo ideal**, inclusive quando são **duas cifras** (selo "Criptografia dupla identificada");
+   - o **algoritmo ideal**, inclusive quando são **duas, três ou quatro cifras** (selo "Criptografia múltipla identificada");
    - a tabela **cifras e chaves na ordem em que foram aplicadas**, e os valores da chave em decimal, hexadecimal e binário;
    - a **verificação**: o programa cifra o texto claro com essas cifras e chaves e confere se dá exatamente o arquivo;
    - a **resposta para o professor** (texto claro, cifras na ordem e chaves), pronta para copiar;
@@ -99,8 +99,50 @@ cifrado (a chave troca de sinal quando o Atbash muda de lado: cada letra vira 26
 mostra **as duas formas, cada uma conferida**, e escolhe a principal pela chave que mais parece uma senha (4 letras ou
 mais) ou, na dúvida, a de letras mais perto de "a". A resposta para o professor traz as duas.
 
-Opções do motor (`bin/motor auto decifrar`): `--max-camadas 1-4` (padrão 3), `--max-periodo 1-24` (padrão 8, o
-máximo do regulamento) e `--tempo-ms` (padrão 3000). No modo manual da tela os dois primeiros têm campos próprios.
+### Três ou quatro cifras em sequência
+
+César, Vigenère e Atbash, em qualquer quantidade e ordem, se fundem numa transformação só: **Vigenère de chave
+efetiva, talvez com Atbash de um dos lados**. Exemplos: `Atbash → César → Vigenère`, `César → Vigenère → Atbash →
+XOR`, `Vigenère("abc") → Vigenère("fghij") → César(4)`. O programa encontra essa transformação efetiva (e o XOR, que
+fica por último) e mostra a forma mais simples que reproduz o arquivo, conferida pela prova real.
+
+- **Duas Vigenère em sequência** somam as chaves: a chave efetiva tem o **mmc** dos tamanhos (3 e 5 letras dão 15).
+  Por isso a busca vai até **24 letras** de chave efetiva. Ela procura também a forma estruturada `a[i mod 3] +
+  b[i mod 5]`, que tem só 7 letras livres e é bem mais firme que uma chave livre de 15 letras. Quando a chave efetiva
+  é a soma exata de duas chaves de até 8 letras, a tela mostra a **decomposição em duas Vigenère**. A ordem e a divisão
+  do deslocamento entre elas não são identificáveis, e o texto da nota diz isso.
+- **Duas fases:** primeiro a busca usa chave de até 8 letras (o regulamento, rápido). Só se nada for aceito pela
+  média de trigramas ela tenta até 24.
+- **Chave longa exige texto mais natural:** quanto menos letras por coluna (n ÷ tamanho da chave), mais a busca
+  consegue "ajustar" uma chave a texto sem sentido. O limiar sobe com o tamanho da chave (calibrado como o limiar
+  normal, com textos que nunca podem ser aceitos).
+- **Chave de ajuste nunca vence a certa:** uma chave longa que é quase a repetição de uma menor, ou quase a soma de
+  duas, é trocada pela forma simples **só se** essa também for aceita e perder no máximo 8 nats de trigramas por letra
+  livre economizada. Uma letra de ajuste "compra" uns 4 a 5 nats; uma coluna errada custa dezenas.
+- **Refinamento final:** a chave escolhida é refinada letra a letra e de duas em duas letras vizinhas (26 × 26), porque
+  colunas vizinhas erradas podem formar trigramas plausíveis entre si.
+
+### Textos com muitos nomes próprios ("decidido pela estrutura da cifra")
+
+Nomes como Mamardashvili, Kvaratskhelia ou Szczesny derrubam a média de trigramas: o próprio texto claro de uma
+escalação da seleção georgiana fica abaixo do limiar de texto natural. Nesse caso o resultado pode ser aceito com
+**confiança média**, pela estrutura da cifra, se **todas** as condições valem:
+
+- pelo menos 150 letras, e pelo menos 20 letras para cada letra de chave escolhida pela busca;
+- uma camada desfeita (ou o XOR, que já exige que todo byte vire letra);
+- IC do texto decifrado de língua natural (≥ 0,055): as colunas da chave ficaram alinhadas entre si;
+- frequência das letras parecida com a do português (≥ −3,40) e bem melhor que a do texto cifrado (+0,25);
+- a **metade mais natural** do texto (blocos de 20 letras) acima de um limiar próprio, que também sobe com o tamanho
+  da chave.
+
+A tela mostra um aviso amarelo com esses números e pede para ler o texto para confirmar. Esse critério foi calibrado
+com os mesmos textos que nunca podem ser aceitos: letras aleatórias, substituição, texto embaralhado, Vigenère de 31 e
+37 letras (inclusive sobre texto embaralhado), substituição seguida de Vigenère e substituição seguida de XOR. Em
+6.800 desses textos, de 60 a 400 letras, **nenhum** foi aceito (nem pela média, nem pela estrutura).
+
+Opções do motor (`bin/motor auto decifrar`): `--max-camadas 1-4` (padrão 4), `--max-periodo 1-24` (padrão 24: cada
+Vigenère tem até 8 letras, mas duas em sequência somam chaves de mmc letras) e `--tempo-ms` (padrão 4500). No modo
+manual da tela os dois primeiros têm campos próprios.
 
 O **modo manual** (embaixo da lista) permite colar o texto e escolher o algoritmo e a chave;
 com a chave vazia ele testa todas as possibilidades daquela cifra.
@@ -169,7 +211,8 @@ npm run calibrar  # recalibra o limiar de "texto natural" (demora cerca de 1 min
 
 Os textos cifrados dos testes vêm de implementações de referência em JS (`tests/cifras.js`) que **não usam o
 motor**, e as cifras e chaves que o motor reporta são reaplicadas por elas ao texto claro. A suíte cobre
-cifras isoladas, César e Vigenère nas duas ordens, combinações com Atbash, três camadas, chave desconhecida,
+cifras isoladas, César e Vigenère nas duas ordens, combinações com Atbash, três e quatro cifras (com XOR por último),
+duas Vigenère em sequência, textos com muitos nomes próprios, chave desconhecida,
 texto curto, textos sem solução (aleatório, Vigenère de 12 e 20 letras, substituição, embaralhado), limites de
 camadas, período e tempo, e a compatibilidade com XOR e com os botões individuais.
 
@@ -180,8 +223,12 @@ camadas, período e tempo, e a compatibilidade com XOR e com os botões individu
   a margem é pequena. Para textos de 175 a 250 letras o texto voltou idêntico em mais de 99,8% dos testes.
 - O limiar de "natural" foi calibrado com português e inglês. Outro idioma, ou texto sem sentido, pode
   ficar inconclusivo (ou, se for parecido com português/inglês, ser aceito com o idioma errado).
-- Vigenère de chave maior que `--max-periodo` e duas cifras de Vigenère em sequência (período = mmc das chaves)
-  só são resolvidos se o limite for aumentado, e com poucas letras por coluna a confiança cai.
+- Chave efetiva acima de 24 letras não é resolvida: por exemplo, Vigenère de 5, 3 e 2 letras em sequência (mmc 30)
+  ou de 6 e 5 (mmc 30). Essas cadeias também passam do orçamento do regulamento (8 letras de Vigenère = 37,6 bits).
+- Com duas Vigenère somando 9 letras ou mais **e** muitos nomes próprios, o resultado pode ficar inconclusivo.
+- **Com 3 ou 4 cifras de letras, o programa não sabe quantas foram usadas:** `César → Vigenère → Atbash` e
+  `Vigenère(chave somada) → Atbash` dão o mesmo texto cifrado. A resposta mostra a forma efetiva (conferida), não a
+  sequência original.
 - Só são analisadas Atbash, César e Vigenère (e o XOR, por último); outras cifras clássicas ficam inconclusivas.
 - Se o último byte **cifrado** do XOR for `0x0A` (quebra de linha), o regulamento manda ignorá-lo
   e a última letra se perde; a tela avisa qual seria a letra.
